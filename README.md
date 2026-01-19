@@ -13,7 +13,6 @@
         --font-center: 6vmin;
         --btn-padding: 1.5vmin 3vmin;
     }
-
     body { 
         font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
         background-color: #2E8B57; 

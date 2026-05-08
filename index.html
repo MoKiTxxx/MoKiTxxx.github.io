@@ -28,6 +28,34 @@
         position: relative;
     }
 
+    @media (max-width: 900px) and (orientation: portrait) {
+        html,
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            position: fixed;
+            inset: 0;
+        }
+
+        body {
+            padding: 0;
+        }
+
+        body.force-landscape #effects-layer,
+        body.force-landscape #game-board,
+        body.force-landscape .round-end-overlay {
+            position: fixed;
+            inset: auto;
+            top: 0;
+            left: 100vw;
+            width: 100vh;
+            height: 100vw;
+            transform: rotate(90deg);
+            transform-origin: top left;
+        }
+    }
+
     #setup-screen {
         position: absolute;
         inset: 0;
@@ -47,6 +75,130 @@
         overflow: hidden;
     }
 
+    .shuffle-intro {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.12), rgba(0,0,0,0.22) 58%, rgba(0,0,0,0.02));
+        opacity: 1;
+        transition: opacity 0.22s ease;
+    }
+    .shuffle-intro.intro-out { opacity: 0; }
+    .shuffle-stage {
+        position: relative;
+        width: 38vmin;
+        height: 30vmin;
+        filter: drop-shadow(0 1.4vmin 1.6vmin rgba(0,0,0,0.34));
+    }
+    .deck-pile {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: var(--card-w);
+        height: var(--card-h);
+        transform: translate(-50%, -50%);
+    }
+    .shuffle-card,
+    .deal-fly-card {
+        position: absolute;
+        width: var(--card-w);
+        height: var(--card-h);
+        border-radius: 1vmin;
+        border: 0.22vmin solid rgba(255,255,255,0.86);
+        background:
+            linear-gradient(135deg, rgba(255,255,255,0.18), rgba(255,255,255,0) 38%),
+            repeating-linear-gradient(45deg, #3b4ba5, #3b4ba5 1vmin, #2a3575 1vmin, #2a3575 2vmin);
+        box-shadow: 0 0.7vmin 1.5vmin rgba(0,0,0,0.36);
+        box-sizing: border-box;
+        will-change: transform, opacity;
+    }
+    .shuffle-card {
+        left: 50%;
+        top: 50%;
+        opacity: 1;
+        transform: translate(-50%, -50%) translate(var(--stack-x, 0), var(--stack-y, 0)) rotate(var(--stack-rot, 0deg));
+        transition: opacity 0.16s ease, transform 0.18s ease;
+    }
+    .deck-pile.is-shuffling .shuffle-card {
+        animation: shuffleCard 0.46s ease-in-out infinite alternate;
+        animation-delay: var(--delay, 0ms);
+    }
+    .deck-pile.is-stacked .shuffle-card {
+        animation: none;
+    }
+    .shuffle-card.is-gone {
+        opacity: 0;
+        transform: translate(-50%, -50%) translate(var(--stack-x, 0), calc(var(--stack-y, 0) + 1.6vmin)) rotate(var(--stack-rot, 0deg)) scale(0.96);
+    }
+    .deal-fly-card {
+        transform: translate(-50%, -50%) scale(0.92);
+        animation: dealFly 0.48s cubic-bezier(0.2, 0.78, 0.18, 1) forwards;
+        animation-delay: var(--deal-delay, 0ms);
+        opacity: 0;
+    }
+    .shuffle-label {
+        position: absolute;
+        left: 50%;
+        top: calc(50% + 18vmin);
+        transform: translateX(-50%);
+        padding: 0.85vmin 2.2vmin;
+        border-radius: 999px;
+        background: rgba(0,0,0,0.58);
+        border: 1px solid rgba(255,255,255,0.22);
+        color: #fff;
+        font-size: 2.35vmin;
+        font-weight: 800;
+        letter-spacing: 0;
+        box-shadow: 0 0.8vmin 1.7vmin rgba(0,0,0,0.28);
+    }
+    #game-board.is-dealing #controls {
+        opacity: 0;
+        pointer-events: none;
+    }
+    .card.card-enter {
+        animation: cardReveal 0.24s ease-out both;
+        animation-delay: var(--enter-delay, 0ms);
+    }
+    @keyframes shuffleCard {
+        0% {
+            transform: translate(-50%, -50%) translate(var(--from-x, -4vmin), var(--stack-y, 0)) rotate(var(--from-rot, -8deg));
+        }
+        48% {
+            transform: translate(-50%, -58%) translate(var(--mid-x, 4vmin), var(--stack-y, 0)) rotate(var(--mid-rot, 9deg));
+        }
+        100% {
+            transform: translate(-50%, -50%) translate(var(--to-x, 1vmin), var(--stack-y, 0)) rotate(var(--to-rot, 3deg));
+        }
+    }
+    @keyframes dealFly {
+        0% {
+            opacity: 0;
+            transform: translate(-50%, -50%) scale(0.88) rotate(0deg);
+        }
+        12% { opacity: 1; }
+        82% {
+            opacity: 1;
+            transform: translate(calc(-50% + var(--dx, 0px)), calc(-50% + var(--dy, 0px))) scale(0.78) rotate(var(--rot, 0deg));
+        }
+        100% {
+            opacity: 0;
+            transform: translate(calc(-50% + var(--dx, 0px)), calc(-50% + var(--dy, 0px))) scale(0.7) rotate(var(--rot, 0deg));
+        }
+    }
+    @keyframes cardReveal {
+        from { opacity: 0; filter: brightness(1.45); }
+        to { opacity: 1; filter: brightness(1); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+        .shuffle-card,
+        .deal-fly-card,
+        .card.card-enter {
+            animation-duration: 0.01ms !important;
+            animation-iteration-count: 1 !important;
+        }
+    }
+
     .btn {
         padding: var(--btn-padding);
         font-size: 2.5vmin;
@@ -64,6 +216,28 @@
     }
     .btn:hover { background: #FFC107; transform: translateY(-0.5vmin); }
     .btn:disabled { background: #ccc; color: #666; cursor: not-allowed; transform: none; box-shadow: none; }
+
+    .audio-toggle-btn {
+        position: fixed;
+        top: calc(env(safe-area-inset-top) + 1.4vmin);
+        right: calc(env(safe-area-inset-right) + 1.4vmin);
+        z-index: 10000;
+        border: 0.18vmin solid rgba(255,255,255,0.42);
+        border-radius: 999px;
+        background: rgba(0,0,0,0.68);
+        color: #fff;
+        padding: 0.85vmin 1.7vmin;
+        font-size: clamp(14px, 2.1vmin, 22px);
+        font-weight: 800;
+        cursor: pointer;
+        box-shadow: 0 0.65vmin 1.4vmin rgba(0,0,0,0.3);
+        touch-action: manipulation;
+    }
+    .audio-toggle-btn:hover { background: rgba(0,0,0,0.82); }
+    .audio-toggle-btn.is-off {
+        background: rgba(80,80,80,0.72);
+        color: #ddd;
+    }
 
     #game-board { width: 100%; height: 100%; position: relative; display: none; }
 
@@ -232,8 +406,9 @@
         position: absolute;
         top: 1.5vmin;
         left: 1.5vmin;
-        min-width: 34vmin;
-        max-width: 48vmin;
+        width: min(48vmin, calc(100vw - 3vmin));
+        min-width: min(34vmin, calc(100vw - 3vmin));
+        max-width: calc(100vw - 3vmin);
         background: rgba(0,0,0,0.72);
         border: 0.22vmin solid rgba(255,255,255,0.34);
         border-radius: 1.6vmin;
@@ -245,6 +420,7 @@
         line-height: 1.5;
         display: none;
         backdrop-filter: blur(0.45vmin);
+        box-sizing: border-box;
     }
     #scoreboard-panel.collapsed {
         min-width: 25vmin;
@@ -289,7 +465,12 @@
     .score-value { font-weight: 700; font-variant-numeric: tabular-nums; }
     .score-delta { margin-left: 0.35vmin; font-size: 1.85vmin; }
     .score-note { color: #ddd; margin-top: 0.65vmin; font-size: 1.85vmin; }
-    .score-compact-line { font-size: 2.05vmin; color: #eee; white-space: nowrap; }
+    .score-note,
+    .score-compact-line {
+        overflow-wrap: anywhere;
+        white-space: normal;
+    }
+    .score-compact-line { font-size: 2.05vmin; color: #eee; }
 
     .setup-card {
         width: min(92vw, 88vmin);
@@ -446,6 +627,8 @@
 </head>
 <body>
 
+<button type="button" id="audio-toggle" class="audio-toggle-btn" aria-pressed="true">聲音：開</button>
+
 <div id="setup-screen">
     <div class="setup-card">
         <h1 class="setup-title">大老二</h1>
@@ -512,6 +695,13 @@ const RANKS = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
 const VALUES = { '3':0, '4':1, '5':2, '6':3, '7':4, '8':5, '9':6, '10':7, 'J':8, 'Q':9, 'K':10, 'A':11, '2':12 };
 const PLAYER_NAMES = ['你', '單眼佬', '刀仔', '星仔'];
 const FIVE_CARD_POWER = { straight: 1, flush: 2, fullhouse: 3, fourkind: 4, straightflush: 5 };
+const AUDIO_BASE_PATH = 'assets/sounds/';
+const AUDIO_FILES = {
+    music: '背景音樂.mp3',
+    shuffle: '洗牌.mp3',
+    computerLose: '哭.mp3',
+    computerWin: ['笑聲1.mp3', '笑聲2.mp3', '笑聲3.mp3']
+};
 const AI_PROFILES = {
     // v3：把角色差異收窄，避免某個 profile 長期吃到評分系統紅利。
     // aggression：壓牌/主動出牌傾向；conserveTwo：保留 2 的傾向；breakTolerance：拆牌容忍度。
@@ -558,6 +748,10 @@ let timeLeft = 20;
 let playedValues = new Set();
 let playerMemory = [];
 let centerClearTimer = null;
+let roundIntroActive = false;
+let audioEnabled = true;
+let backgroundMusic = null;
+let sfxAudio = {};
 
 let testMode = false;
 let testRunning = false;
@@ -610,6 +804,11 @@ function bindClick(id, fn) {
 }
 
 function bindUI() {
+    audioEnabled = loadAudioPreference();
+    initAudioSystem();
+    updateAudioToggle();
+    bindClick('audio-toggle', toggleAudio);
+
     bindClick('start-2', () => startGame(2));
     bindClick('start-3', () => startGame(3));
     bindClick('start-4', () => startGame(4));
@@ -644,7 +843,332 @@ function byId(id) {
     return document.getElementById(id);
 }
 
-function startGame(n) {
+function delay(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function prefersReducedMotion() {
+    return window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+function audioAssetUrl(fileName) {
+    return AUDIO_BASE_PATH + encodeURIComponent(fileName);
+}
+
+function loadAudioPreference() {
+    try {
+        return localStorage.getItem('big2-audio-enabled') !== 'false';
+    } catch (err) {
+        return true;
+    }
+}
+
+function saveAudioPreference() {
+    try {
+        localStorage.setItem('big2-audio-enabled', audioEnabled ? 'true' : 'false');
+    } catch (err) {
+        // Audio preference is optional; ignore storage restrictions.
+    }
+}
+
+function createAudio(fileName, options = {}) {
+    const audio = new Audio(audioAssetUrl(fileName));
+    audio.preload = options.preload || 'auto';
+    audio.loop = !!options.loop;
+    audio.volume = typeof options.volume === 'number' ? options.volume : 1;
+    return audio;
+}
+
+function initAudioSystem() {
+    if (backgroundMusic) return;
+    backgroundMusic = createAudio(AUDIO_FILES.music, { loop: true, volume: 0.36 });
+    sfxAudio = {
+        shuffle: createAudio(AUDIO_FILES.shuffle, { volume: 0.82 }),
+        computerLose: createAudio(AUDIO_FILES.computerLose, { volume: 0.92 }),
+        computerWin: AUDIO_FILES.computerWin.map(file => createAudio(file, { volume: 0.92 }))
+    };
+}
+
+function safePlayAudio(audio) {
+    if (!audio || !audioEnabled) return;
+    const playPromise = audio.play();
+    if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise.catch(() => {});
+    }
+}
+
+function playOneShot(audio) {
+    if (!audioEnabled || !audio) return;
+    try {
+        audio.pause();
+        audio.currentTime = 0;
+    } catch (err) {
+        // Some browsers may not allow currentTime before metadata is ready.
+    }
+    safePlayAudio(audio);
+}
+
+function ensureBackgroundMusic() {
+    initAudioSystem();
+    if (!audioEnabled || !backgroundMusic) return;
+    safePlayAudio(backgroundMusic);
+}
+
+function queueBackgroundMusicStart() {
+    setTimeout(ensureBackgroundMusic, 0);
+}
+
+function pauseBackgroundMusic() {
+    if (!backgroundMusic) return;
+    backgroundMusic.pause();
+}
+
+function stopAllSfx() {
+    if (!sfxAudio) return;
+    const all = [sfxAudio.shuffle, sfxAudio.computerLose, ...(sfxAudio.computerWin || [])];
+    all.forEach(audio => {
+        if (!audio) return;
+        audio.pause();
+        try { audio.currentTime = 0; } catch (err) {}
+    });
+}
+
+function updateAudioToggle() {
+    const btn = byId('audio-toggle');
+    if (!btn) return;
+    btn.textContent = audioEnabled ? '聲音：開' : '聲音：關';
+    btn.classList.toggle('is-off', !audioEnabled);
+    btn.setAttribute('aria-pressed', audioEnabled ? 'true' : 'false');
+}
+
+function toggleAudio() {
+    audioEnabled = !audioEnabled;
+    saveAudioPreference();
+    updateAudioToggle();
+    if (audioEnabled) queueBackgroundMusicStart();
+    else {
+        pauseBackgroundMusic();
+        stopAllSfx();
+    }
+}
+
+function playShuffleAudio() {
+    initAudioSystem();
+    playOneShot(sfxAudio.shuffle);
+}
+
+function playRoundEndAudio(winnerIdx) {
+    initAudioSystem();
+    if (winnerIdx === 0) {
+        playOneShot(sfxAudio.computerLose);
+        return;
+    }
+
+    const laughs = sfxAudio.computerWin || [];
+    if (laughs.length === 0) return;
+    const selected = laughs[Math.floor(Math.random() * laughs.length)];
+    playOneShot(selected);
+}
+
+function shouldUseMobileLandscape() {
+    return window.matchMedia && window.matchMedia('(max-width: 900px)').matches;
+}
+
+function requestMobileLandscape() {
+    if (!shouldUseMobileLandscape()) return;
+    document.body.classList.add('force-landscape');
+}
+
+function setRoundIntroActive(active) {
+    roundIntroActive = active;
+    const board = byId('game-board');
+    if (board) board.classList.toggle('is-dealing', active);
+}
+
+function clearPlayerAreas() {
+    for (let i = 0; i < 4; i++) {
+        const area = byId(`p${i}`);
+        if (area) area.innerHTML = '';
+    }
+}
+
+function removeDealIntro() {
+    const layer = byId('effects-layer');
+    if (!layer) return;
+    layer.querySelectorAll('.shuffle-intro').forEach(el => el.remove());
+}
+
+function createIntroCard(className) {
+    const el = document.createElement('div');
+    el.className = className;
+    return el;
+}
+
+function updateDeckPileVisual(pileCards, remainingCards, totalCards) {
+    if (!pileCards || pileCards.length === 0) return;
+    const safeTotal = Math.max(1, totalCards || 1);
+    const visibleCount = Math.ceil((Math.max(0, remainingCards) / safeTotal) * pileCards.length);
+    pileCards.forEach((card, idx) => {
+        card.classList.toggle('is-gone', idx >= visibleCount);
+    });
+}
+
+function getDealTargetPoint(playerIdx, cardOrdinal) {
+    const area = byId(`p${playerIdx}`);
+    const rect = area ? area.getBoundingClientRect() : null;
+    let x = rect && (rect.width > 2 || rect.height > 2) ? rect.left + rect.width / 2 : window.innerWidth / 2;
+    let y = rect && (rect.width > 2 || rect.height > 2) ? rect.top + rect.height / 2 : window.innerHeight / 2;
+
+    if (!rect || (rect.width <= 2 && rect.height <= 2)) {
+        const fallback = [
+            { x: window.innerWidth * 0.5, y: window.innerHeight * 0.78 },
+            { x: window.innerWidth * 0.86, y: window.innerHeight * 0.5 },
+            { x: window.innerWidth * 0.5, y: window.innerHeight * 0.12 },
+            { x: window.innerWidth * 0.14, y: window.innerHeight * 0.5 }
+        ][playerIdx] || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+        x = fallback.x;
+        y = fallback.y;
+    }
+
+    const fan = (cardOrdinal - 6) * Math.min(window.innerWidth, window.innerHeight) * 0.006;
+    if (playerIdx === 0 || playerIdx === 2) x += fan;
+    else y += fan;
+    return { x, y };
+}
+
+async function runShuffleDealIntro() {
+    const layer = byId('effects-layer');
+    if (!layer) return;
+
+    removeDealIntro();
+    const reduced = prefersReducedMotion();
+    const intro = document.createElement('div');
+    intro.className = 'shuffle-intro';
+
+    const stage = document.createElement('div');
+    stage.className = 'shuffle-stage';
+    intro.appendChild(stage);
+
+    const pile = document.createElement('div');
+    pile.className = 'deck-pile is-shuffling';
+    stage.appendChild(pile);
+
+    const pileCards = [];
+    const pileLayers = 20;
+    for (let i = 0; i < pileLayers; i++) {
+        const card = createIntroCard('shuffle-card');
+        const stackOffset = (i - pileLayers / 2) * 0.035;
+        card.style.zIndex = String(i);
+        card.style.setProperty('--delay', `${i * -42}ms`);
+        card.style.setProperty('--stack-x', `${stackOffset}vmin`);
+        card.style.setProperty('--stack-y', `${-stackOffset * 0.65}vmin`);
+        card.style.setProperty('--stack-rot', `${-2 + i * 0.2}deg`);
+        card.style.setProperty('--from-x', `${-4.8 + i * 0.28}vmin`);
+        card.style.setProperty('--mid-x', `${4.2 - i * 0.22}vmin`);
+        card.style.setProperty('--to-x', `${stackOffset}vmin`);
+        card.style.setProperty('--from-rot', `${-11 + i * 0.85}deg`);
+        card.style.setProperty('--mid-rot', `${10 - i * 0.7}deg`);
+        card.style.setProperty('--to-rot', `${-2 + i * 0.2}deg`);
+        pile.appendChild(card);
+        pileCards.push(card);
+    }
+
+    const label = document.createElement('div');
+    label.className = 'shuffle-label';
+    label.textContent = '\u6d17\u724c\u4e2d';
+    intro.appendChild(label);
+    layer.appendChild(intro);
+
+    updateStatus('\u6d17\u724c\u4e2d...');
+    playShuffleAudio();
+    await delay(reduced ? 180 : 980);
+
+    pile.classList.remove('is-shuffling');
+    pile.classList.add('is-stacked');
+    label.textContent = '\u6e96\u5099\u6d3e\u724c';
+    updateStatus('\u6e96\u5099\u6d3e\u724c...');
+    await delay(reduced ? 40 : 360);
+
+    label.textContent = '\u6d3e\u724c\u4e2d';
+    updateStatus('\u6d3e\u724c\u4e2d...');
+
+    const centerX = window.innerWidth / 2;
+    const centerY = window.innerHeight / 2;
+    const totalCards = Math.min(numPlayers * 13, 52);
+    const interval = reduced ? 2 : 34;
+    const flyDuration = reduced ? 20 : 440;
+    updateDeckPileVisual(pileCards, totalCards, totalCards);
+
+    for (let i = 0; i < totalCards; i++) {
+        const playerIdx = i % numPlayers;
+        const cardOrdinal = Math.floor(i / numPlayers);
+        const target = getDealTargetPoint(playerIdx, cardOrdinal);
+        const card = createIntroCard('deal-fly-card');
+        card.style.left = `${centerX}px`;
+        card.style.top = `${centerY}px`;
+        card.style.setProperty('--dx', `${target.x - centerX}px`);
+        card.style.setProperty('--dy', `${target.y - centerY}px`);
+        card.style.setProperty('--rot', `${(playerIdx - 1.5) * 18 + (cardOrdinal - 6) * 1.2}deg`);
+        card.style.setProperty('--deal-delay', `${i * interval}ms`);
+        card.style.zIndex = '60';
+        intro.appendChild(card);
+
+        setTimeout(() => updateDeckPileVisual(pileCards, totalCards - i - 1, totalCards), i * interval);
+        setTimeout(() => card.remove(), i * interval + flyDuration + 80);
+    }
+
+    await delay(totalCards * interval + flyDuration + (reduced ? 40 : 170));
+    intro.classList.add('intro-out');
+    await delay(reduced ? 20 : 220);
+    intro.remove();
+}
+
+function animateFreshCards() {
+    const cards = document.querySelectorAll('.hand-container .card');
+    cards.forEach((card, idx) => {
+        card.classList.add('card-enter');
+        card.style.setProperty('--enter-delay', `${Math.min(idx, 52) * 8}ms`);
+    });
+
+    setTimeout(() => {
+        cards.forEach(card => {
+            card.classList.remove('card-enter');
+            card.style.removeProperty('--enter-delay');
+        });
+    }, 760);
+}
+
+async function startRoundWithIntro() {
+    const center = byId('center-area');
+    if (center) center.innerHTML = '';
+
+    if (!testMode) {
+        setRoundIntroActive(true);
+        clearPlayerAreas();
+        updateStatus('\u6d17\u724c\u4e2d...');
+    }
+
+    initGame({ autoStart: false, render: false });
+
+    if (!testMode) {
+        try {
+            await runShuffleDealIntro();
+        } catch (err) {
+            console.error('Deal intro failed', err);
+        } finally {
+            removeDealIntro();
+            setRoundIntroActive(false);
+        }
+    }
+
+    checkTurn();
+    if (!testMode) animateFreshCards();
+}
+
+async function startGame(n) {
+    requestMobileLandscape();
+    queueBackgroundMusicStart();
+
     testMode = false;
     testAllowTriples = false;
     testRunning = false;
@@ -667,7 +1191,7 @@ function startGame(n) {
     const board = byId('scoreboard-panel');
     if (board) board.style.display = 'block';
     updateScoreboard();
-    initGame({ autoStart: true, render: true });
+    startRoundWithIntro();
 }
 
 function startTestMode() {
@@ -1024,13 +1548,16 @@ function updateStatus(msg) {
 }
 
 function toggleSelect(val) {
-    if (!gameActive || testMode || currentPlayer !== 0) return;
+    if (!gameActive || testMode || roundIntroActive || currentPlayer !== 0) return;
     const card = players[0].hand.find(c => c.value === val);
-    if (card) card.selected = !card.selected;
+    if (card) {
+        card.selected = !card.selected;
+    }
     renderHands();
 }
 
 function sortHand() {
+    if (roundIntroActive) return;
     if (!players[0] || players[0].hand.length === 0) return;
     isSuitSort = !isSuitSort;
     if (isSuitSort) {
@@ -1046,6 +1573,7 @@ function sortHand() {
 }
 
 function humanPlay() {
+    if (roundIntroActive) return;
     const selected = players[0].hand.filter(c => c.selected);
     if (selected.length === 0) return;
     const pat = analyzePattern(selected);
@@ -1057,6 +1585,7 @@ function humanPlay() {
 }
 
 function humanPass() {
+    if (roundIntroActive) return;
     if (isFirstRound || !lastPlayedCards) return;
     players[0].hand.forEach(c => c.selected = false);
     passTurn(false);
@@ -4575,7 +5104,9 @@ function playCards(playerIdx, cards, pattern, silent) {
     p.hand = p.hand.filter(c => !cards.includes(c));
     cards.forEach(c => playedValues.add(c.value));
 
-    if (!silent) renderCenterCards(displayCards);
+    if (!silent) {
+        renderCenterCards(displayCards);
+    }
 
     if (p.hand.length === 0) {
         gameActive = false;
@@ -4666,7 +5197,9 @@ function updateScoreboard() {
         .map((score, idx) => ({ score, idx }))
         .filter(item => item.score === maxScore)
         .map(item => item.idx);
-    const leaderText = leaderIndexes.map(idx => PLAYER_NAMES[idx]).join('、');
+    const leaderText = leaderIndexes.length === numPlayers
+        ? '無'
+        : leaderIndexes.map(idx => PLAYER_NAMES[idx]).join('、');
 
     board.classList.toggle('collapsed', scoreboardCollapsed);
 
@@ -4684,7 +5217,7 @@ function updateScoreboard() {
                 <h3>積分榜</h3>
                 <button type="button" id="score-toggle-btn" class="score-toggle-btn">展開</button>
             </div>
-            <div class="score-compact-line">第 ${matchRoundPlayed}/${matchTargetRounds} 局｜領先：${leaderText} ${maxScore}</div>
+            <div class="score-compact-line">第 ${matchRoundPlayed}/${matchTargetRounds} 局｜領先：${leaderText}${leaderText === '無' ? '' : ` ${maxScore}`}</div>
         `;
         return;
     }
@@ -4788,14 +5321,16 @@ function hideRoundEndPanel() {
     if (overlay) overlay.style.display = 'none';
 }
 
-function continueToNextRound() {
+async function continueToNextRound() {
     if (matchRoundPlayed >= matchTargetRounds) return;
+    requestMobileLandscape();
+    queueBackgroundMusicStart();
     hideRoundEndPanel();
     cancelCenterClearTimer();
     const center = byId('center-area');
     if (center) center.innerHTML = '';
-    initGame({ autoStart: true, render: true });
     updateScoreboard();
+    startRoundWithIntro();
 }
 
 function restartToSetup() {
@@ -4804,6 +5339,7 @@ function restartToSetup() {
 
 function handleNormalGameOver(winnerIdx) {
     const winner = players[winnerIdx];
+    playRoundEndAudio(winnerIdx);
     const scoreInfo = calculateRoundScoreDeltas(winnerIdx);
     matchLastRoundDeltas = scoreInfo.deltas;
     matchScores = matchScores.map((score, idx) => score + scoreInfo.deltas[idx]);
@@ -4847,13 +5383,17 @@ function passTurn(silent) {
     stopCountdown();
     if (lastPlayedCards) recordPass(currentPlayer, lastPlayedCards);
     if (testMode) logTestPass(currentPlayer);
-    else if (!silent) renderPassEffect(currentPlayer);
+    else if (!silent) {
+        renderPassEffect(currentPlayer);
+    }
 
     passCount++;
     if (passCount >= numPlayers - 1) {
         lastPlayedCards = null;
         if (testMode) addTestLog('---- 一輪結束：所有其他玩家 Pass，清空桌面 ----');
-        else scheduleCenterClearForEmptyTable();
+        else {
+            scheduleCenterClearForEmptyTable();
+        }
     }
     currentPlayer = (currentPlayer + 1) % numPlayers;
     if (!silent) checkTurn();

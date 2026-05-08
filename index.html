@@ -812,9 +812,10 @@
             overflow: hidden;
         }
 
-        #p1 { left: 2vw; right: auto; }
+        /* 手機版把對手座位改成：右 -> 上 -> 左，和實際出牌順序一致 */
+        #p1 { left: auto; right: 2vw; }
         #p2 { left: 34.5vw; }
-        #p3 { left: auto; right: 2vw; }
+        #p3 { left: 2vw; right: auto; }
 
         #p1 .name-tag,
         #p2 .name-tag,
@@ -940,7 +941,7 @@
             overflow-y: visible;
             justify-content: flex-start;
             align-items: flex-end;
-            padding: 24px 12px 12px;
+            padding: 24px calc(env(safe-area-inset-right) + 18px) 12px calc(env(safe-area-inset-left) + 10px);
             box-sizing: border-box;
             -webkit-overflow-scrolling: touch;
             scrollbar-width: none;
@@ -951,9 +952,10 @@
         }
 
         #p0 .card {
-            flex: 0 0 var(--card-w);
-            min-width: var(--card-w);
-            margin-left: calc(var(--card-w) * -0.33);
+            width: clamp(39px, 10vw, 44px);
+            flex: 0 0 clamp(39px, 10vw, 44px);
+            min-width: clamp(39px, 10vw, 44px);
+            margin-left: -16px;
             border-radius: 7px;
             padding: 3px;
         }
@@ -1222,6 +1224,7 @@ let roundIntroActive = false;
 let audioEnabled = true;
 let backgroundMusic = null;
 let sfxAudio = {};
+let audioUnlocked = false;
 
 let testMode = false;
 let testRunning = false;
@@ -1278,6 +1281,10 @@ function bindUI() {
     initAudioSystem();
     updateAudioToggle();
     bindClick('audio-toggle', toggleAudio);
+
+    ['pointerdown', 'touchstart', 'click', 'keydown'].forEach(eventName => {
+        document.addEventListener(eventName, unlockAudio, { once: true, passive: true });
+    });
 
     bindClick('start-2', () => startGame(2));
     bindClick('start-3', () => startGame(3));
@@ -1346,6 +1353,7 @@ function createAudio(fileName, options = {}) {
     audio.preload = options.preload || 'auto';
     audio.loop = !!options.loop;
     audio.volume = typeof options.volume === 'number' ? options.volume : 1;
+    audio.setAttribute('playsinline', '');
     return audio;
 }
 
@@ -1359,8 +1367,54 @@ function initAudioSystem() {
     };
 }
 
+function getAllAudioElements() {
+    initAudioSystem();
+    return [
+        backgroundMusic,
+        sfxAudio.shuffle,
+        sfxAudio.computerLose,
+        ...(sfxAudio.computerWin || [])
+    ].filter(Boolean);
+}
+
+function unlockAudio() {
+    initAudioSystem();
+    if (!audioEnabled || audioUnlocked) return;
+
+    const audios = getAllAudioElements();
+    audioUnlocked = true;
+
+    audios.forEach(audio => {
+        const wasMuted = audio.muted;
+        audio.muted = true;
+
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.then === 'function') {
+            playPromise
+                .then(() => {
+                    audio.pause();
+                    try { audio.currentTime = 0; } catch (err) {}
+                    audio.muted = wasMuted;
+                })
+                .catch(() => {
+                    audio.muted = wasMuted;
+                    audioUnlocked = false;
+                });
+        } else {
+            audio.pause();
+            try { audio.currentTime = 0; } catch (err) {}
+            audio.muted = wasMuted;
+        }
+    });
+}
+
 function safePlayAudio(audio) {
     if (!audio || !audioEnabled) return;
+
+    if (!audioUnlocked) {
+        unlockAudio();
+    }
+
     const playPromise = audio.play();
     if (playPromise && typeof playPromise.catch === 'function') {
         playPromise.catch(() => {});
@@ -1385,7 +1439,9 @@ function ensureBackgroundMusic() {
 }
 
 function queueBackgroundMusicStart() {
-    setTimeout(ensureBackgroundMusic, 0);
+    unlockAudio();
+    ensureBackgroundMusic();
+    setTimeout(ensureBackgroundMusic, 80);
 }
 
 function pauseBackgroundMusic() {
@@ -1415,8 +1471,11 @@ function toggleAudio() {
     audioEnabled = !audioEnabled;
     saveAudioPreference();
     updateAudioToggle();
-    if (audioEnabled) queueBackgroundMusicStart();
-    else {
+    if (audioEnabled) {
+        audioUnlocked = false;
+        unlockAudio();
+        queueBackgroundMusicStart();
+    } else {
         pauseBackgroundMusic();
         stopAllSfx();
     }
@@ -1640,6 +1699,7 @@ async function startRoundWithIntro() {
 
 async function startGame(n) {
     requestMobileLandscape();
+    unlockAudio();
     queueBackgroundMusicStart();
 
     testMode = false;
@@ -2031,6 +2091,7 @@ function toggleSelect(val) {
 }
 
 function sortHand() {
+    unlockAudio();
     if (roundIntroActive) return;
     if (!players[0] || players[0].hand.length === 0) return;
     isSuitSort = !isSuitSort;
@@ -2047,6 +2108,7 @@ function sortHand() {
 }
 
 function humanPlay() {
+    unlockAudio();
     if (roundIntroActive) return;
     const selected = players[0].hand.filter(c => c.selected);
     if (selected.length === 0) return;
@@ -2059,6 +2121,7 @@ function humanPlay() {
 }
 
 function humanPass() {
+    unlockAudio();
     if (roundIntroActive) return;
     if (isFirstRound || !lastPlayedCards) return;
     players[0].hand.forEach(c => c.selected = false);

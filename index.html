@@ -28,33 +28,211 @@
         position: relative;
     }
 
-    @media (max-width: 900px) and (orientation: portrait) {
-        html,
-        body {
-            width: 100vw;
-            height: 100vh;
-            overflow: hidden;
-            position: fixed;
-            inset: 0;
-        }
-
-        body {
-            padding: 0;
-        }
-
-        body.force-landscape #effects-layer,
-        body.force-landscape #game-board,
-        body.force-landscape .round-end-overlay {
-            position: fixed;
-            inset: auto;
-            top: 0;
-            left: 100vw;
-            width: 100vh;
-            height: 100vw;
-            transform: rotate(90deg);
-            transform-origin: top left;
-        }
+   @media (max-width: 900px) and (orientation: portrait) {
+    html,
+    body {
+        width: 100vw;
+        height: 100dvh;
+        overflow: hidden;
+        position: fixed;
+        inset: 0;
     }
+
+    body {
+        padding: 0;
+    }
+
+    body.force-landscape #effects-layer,
+    body.force-landscape #game-board,
+    body.force-landscape .round-end-overlay {
+        position: fixed;
+        inset: 0;
+        width: 100vw;
+        height: 100dvh;
+        transform: none;
+    }
+
+    :root {
+        --card-w: clamp(38px, 10.5vw, 48px);
+        --card-h: calc(var(--card-w) * 1.4);
+        --font-rank: clamp(13px, 3.8vw, 18px);
+        --font-suit: clamp(12px, 3.4vw, 16px);
+        --font-center: clamp(22px, 7vw, 32px);
+        --btn-padding: 10px 12px;
+    }
+
+    #game-board {
+        width: 100vw;
+        height: 100dvh;
+    }
+
+    .audio-toggle-btn {
+        top: calc(env(safe-area-inset-top) + 8px);
+        right: calc(env(safe-area-inset-right) + 8px);
+        font-size: 14px;
+        padding: 8px 12px;
+        z-index: 10000;
+    }
+
+    #scoreboard-panel {
+        top: calc(env(safe-area-inset-top) + 8px);
+        left: 8px;
+        width: min(56vw, 260px);
+        min-width: 0;
+        max-width: 56vw;
+        padding: 8px 10px;
+        font-size: 12px;
+        z-index: 170;
+    }
+
+    #scoreboard-panel h3 {
+        font-size: 18px;
+    }
+
+    .score-row {
+        font-size: 13px;
+        gap: 8px;
+    }
+
+    .score-note,
+    .score-compact-line {
+        font-size: 12px;
+    }
+
+    .score-toggle-btn {
+        font-size: 12px;
+        padding: 4px 8px;
+    }
+
+    #p0 {
+        bottom: calc(env(safe-area-inset-bottom) + 76px);
+        left: 50%;
+        transform: translateX(-50%);
+        width: 98vw;
+        height: auto;
+        z-index: 20;
+        align-items: flex-end;
+    }
+
+    #p0 .hand-container {
+        max-width: 98vw;
+        overflow-x: auto;
+        overflow-y: visible;
+        justify-content: flex-start;
+        align-items: flex-end;
+        padding: 18px 8px 10px;
+        -webkit-overflow-scrolling: touch;
+    }
+
+    #p0 .card {
+        flex: 0 0 var(--card-w);
+        margin-left: calc(var(--card-w) * -0.52);
+    }
+
+    #p0 .card:first-child {
+        margin-left: 0;
+    }
+
+    #p0 .name-tag {
+        bottom: -28px;
+        font-size: 13px;
+        padding: 5px 10px;
+    }
+
+    #controls {
+        bottom: calc(env(safe-area-inset-bottom) + 10px);
+        left: 50%;
+        transform: translateX(-50%);
+        width: 96vw;
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        z-index: 80;
+    }
+
+    #controls .btn {
+        min-width: 0;
+        flex: 1 1 0;
+        max-width: 31vw;
+        margin: 0;
+        font-size: 14px;
+        padding: 10px 8px;
+        border-radius: 8px;
+    }
+
+    #center-area {
+        top: 46%;
+        left: 50%;
+        width: 90vw;
+        height: 18vh;
+        z-index: 1;
+    }
+
+    #status-msg {
+        top: 34%;
+        max-width: 86vw;
+        white-space: normal;
+        text-align: center;
+        font-size: 15px;
+        line-height: 1.35;
+        padding: 8px 12px;
+        border-radius: 18px;
+        z-index: 150;
+    }
+
+    #timer-display {
+        bottom: 18%;
+        right: 4%;
+        font-size: 42px;
+    }
+
+    #p2 {
+        top: 72px;
+        left: 50%;
+        transform: translateX(-50%) rotate(180deg);
+        width: 78vw;
+        height: auto;
+    }
+
+    #p1 {
+        right: -34px;
+        top: 50%;
+        transform: translateY(-50%) rotate(-90deg);
+        width: 70vw;
+        height: auto;
+    }
+
+    #p3 {
+        left: -34px;
+        top: 50%;
+        transform: translateY(-50%) rotate(90deg);
+        width: 70vw;
+        height: auto;
+    }
+
+    #p1 .name-tag,
+    #p3 .name-tag {
+        font-size: 13px;
+        top: -34px;
+    }
+
+    #p2 .name-tag {
+        font-size: 13px;
+        top: -32px;
+    }
+
+    .played-card {
+        margin-left: calc(var(--card-w) * -0.58);
+    }
+
+    .card.selected {
+        transform: translateY(-22px);
+    }
+
+    .btn:hover {
+        transform: none;
+    }
+}
 
     #setup-screen {
         position: absolute;

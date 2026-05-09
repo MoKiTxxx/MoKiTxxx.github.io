@@ -39,6 +39,9 @@
         flex-direction: column;
         justify-content: center;
         align-items: center;
+        overflow: auto;
+        padding: 2vmin;
+        box-sizing: border-box;
     }
 
     #effects-layer {
@@ -470,6 +473,8 @@
 
     .setup-card {
         width: min(92vw, 88vmin);
+        max-height: calc(100vh - 4vmin);
+        overflow: auto;
         padding: 4.5vmin 5vmin;
         border-radius: 3vmin;
         background: rgba(0, 0, 0, 0.18);
@@ -523,6 +528,23 @@
         text-align: center;
         border-radius: 1.2vmin;
         border: 0.25vmin solid rgba(255,255,255,0.75);
+    }
+    .rule-toggle {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 1vmin;
+        margin-top: 1.2vmin;
+        font-size: clamp(20px, 3vmin, 32px);
+        font-weight: 800;
+        color: #fff;
+        cursor: pointer;
+        user-select: none;
+    }
+    .rule-toggle input {
+        width: clamp(20px, 2.8vmin, 30px);
+        height: clamp(20px, 2.8vmin, 30px);
+        accent-color: #FFD700;
     }
     .round-note {
         display: block;
@@ -907,11 +929,11 @@
 
         #p0 {
             position: absolute;
-            left: 0;
-            right: 0;
+            left: 50%;
+            right: auto;
             bottom: calc(env(safe-area-inset-bottom) + 72px);
-            transform: none;
-            width: 100vw;
+            transform: translateX(-50%);
+            width: min(100vw, 720px);
             height: 124px;
             z-index: 30;
             display: flex;
@@ -934,14 +956,13 @@
         }
 
         #p0 .hand-container {
-            width: 100vw;
-            max-width: 100vw;
+            width: 100%;
+            max-width: 100%;
             height: 116px;
-            overflow-x: auto;
-            overflow-y: visible;
-            justify-content: flex-start;
+            overflow: visible;
+            justify-content: center;
             align-items: flex-end;
-            padding: 24px calc(env(safe-area-inset-right) + 18px) 12px calc(env(safe-area-inset-left) + 10px);
+            padding: 24px 8px 12px;
             box-sizing: border-box;
             -webkit-overflow-scrolling: touch;
             scrollbar-width: none;
@@ -973,6 +994,10 @@
         .card-corner {
             width: 20px;
             line-height: 0.88;
+        }
+
+        .card-center {
+            display: none;
         }
 
         .rank-text {
@@ -1119,8 +1144,13 @@
                 <label for="match-round-count">比賽局數</label>
                 <input id="match-round-count" class="test-input" type="number" min="1" max="1000" value="10">
             </div>
+            <label class="rule-toggle" for="allow-triples">
+                <input id="allow-triples" type="checkbox">
+                允許三條
+            </label>
             <span class="round-note">每局結束會按剩牌計分、更新積分榜，並展示所有人手牌。</span>
         </div>
+
     </div>
 </div>
 
@@ -1142,6 +1172,7 @@
         <button class="btn" id="btn-pass" style="background:#888;">Pass</button>
         <button class="btn" id="btn-sort" style="background:#20B2AA;">按花色排序</button>
     </div>
+
 </div>
 
 <div id="round-end-overlay" class="round-end-overlay" aria-live="polite">
@@ -1243,12 +1274,20 @@ let testMaxLoserRemaining = { playerIdx: -1, count: -1, gameNo: -1 };
 let testBadLossCounts = []; // 每位玩家剩牌 >= 8 的慘敗次數
 let testOneCardLossCounts = []; // 每位玩家剩 1 張輸掉的次數
 let testScoreStats = []; // 測試模式累計積分
+let testCheatChosenCounts = [];
+let testCheatWinCounts = [];
+let testCurrentCheaterIdx = -1;
 let matchTargetRounds = 1;
 let matchRoundPlayed = 0;
 let matchScores = [];
 let matchLastRoundDeltas = [];
 let scoreboardCollapsed = false;
 let revealAllHandsAfterRound = false; // v9C：每局結束後暫時亮出所有人手牌
+let hiddenCheaterAiIndex = -1;
+let hiddenCheatMode = 'best-hand';
+let fixedHiddenCheaterAiIndex = 1;
+let hiddenCheatPlan = [];
+let hiddenCheatPlanCursor = 0;
 
 // v9E-EndSolver：固定 seed / 同一批牌組重播。
 // 原則：發牌 RNG 只由 base seed + 玩家數 + 局號決定，避免 AI 分數微隨機影響牌組。
@@ -1256,6 +1295,7 @@ let testFixedSeedEnabled = true;
 let testSeedText = '20260504-v9E';
 let testBaseSeed = 0;
 let currentDeckSeed = 0;
+let currentAiSeed = 0;
 let testAiRng = null;
 
 
@@ -1329,7 +1369,7 @@ function prefersReducedMotion() {
 }
 
 function audioAssetUrl(fileName) {
-    return AUDIO_BASE_PATH + encodeURIComponent(fileName);
+    return AUDIO_BASE_PATH + fileName;
 }
 
 function loadAudioPreference() {
@@ -1354,6 +1394,7 @@ function createAudio(fileName, options = {}) {
     audio.loop = !!options.loop;
     audio.volume = typeof options.volume === 'number' ? options.volume : 1;
     audio.setAttribute('playsinline', '');
+    audio.playsInline = true;
     return audio;
 }
 
@@ -1381,30 +1422,9 @@ function unlockAudio() {
     initAudioSystem();
     if (!audioEnabled || audioUnlocked) return;
 
-    const audios = getAllAudioElements();
     audioUnlocked = true;
-
-    audios.forEach(audio => {
-        const wasMuted = audio.muted;
-        audio.muted = true;
-
-        const playPromise = audio.play();
-        if (playPromise && typeof playPromise.then === 'function') {
-            playPromise
-                .then(() => {
-                    audio.pause();
-                    try { audio.currentTime = 0; } catch (err) {}
-                    audio.muted = wasMuted;
-                })
-                .catch(() => {
-                    audio.muted = wasMuted;
-                    audioUnlocked = false;
-                });
-        } else {
-            audio.pause();
-            try { audio.currentTime = 0; } catch (err) {}
-            audio.muted = wasMuted;
-        }
+    getAllAudioElements().forEach(audio => {
+        try { audio.load(); } catch (err) {}
     });
 }
 
@@ -1415,9 +1435,12 @@ function safePlayAudio(audio) {
         unlockAudio();
     }
 
+    audio.muted = false;
     const playPromise = audio.play();
     if (playPromise && typeof playPromise.catch === 'function') {
-        playPromise.catch(() => {});
+        playPromise.catch(() => {
+            audioUnlocked = false;
+        });
     }
 }
 
@@ -1442,6 +1465,7 @@ function queueBackgroundMusicStart() {
     unlockAudio();
     ensureBackgroundMusic();
     setTimeout(ensureBackgroundMusic, 80);
+    setTimeout(ensureBackgroundMusic, 450);
 }
 
 function pauseBackgroundMusic() {
@@ -1703,7 +1727,9 @@ async function startGame(n) {
     queueBackgroundMusicStart();
 
     testMode = false;
-    testAllowTriples = false;
+    hiddenCheatMode = 'best-hand';
+    fixedHiddenCheaterAiIndex = 1;
+    testAllowTriples = !!(byId('allow-triples') && byId('allow-triples').checked);
     testRunning = false;
     testStopRequested = false;
     numPlayers = n;
@@ -1730,14 +1756,22 @@ async function startGame(n) {
 
 function startTestMode() {
     try {
+        unlockAudio();
         const gameCountRaw = parseInt(byId('test-game-count').value, 10);
         const playerCountRaw = parseInt(byId('test-player-count').value, 10);
-        testBatchTarget = clamp(Number.isFinite(gameCountRaw) ? gameCountRaw : 1, 1, 10000);
+        const cheaterValue = byId('test-cheater-player') ? byId('test-cheater-player').value : 'best';
+        testBatchTarget = clamp(Number.isFinite(gameCountRaw) ? gameCountRaw : 1, 1, 5000);
         numPlayers = clamp(Number.isFinite(playerCountRaw) ? playerCountRaw : 4, 2, 4);
-        testLogHands = byId('test-log-hands').checked;
-        testAllowTriples = byId('test-allow-triples').checked;
-        testFixedSeedEnabled = !!(byId('test-fixed-seed') && byId('test-fixed-seed').checked);
-        testSeedText = (byId('test-seed-value') && byId('test-seed-value').value.trim()) || '20260504-v9E';
+        const cheaterRaw = parseInt(cheaterValue, 10);
+        fixedHiddenCheaterAiIndex = clamp(Number.isFinite(cheaterRaw) ? cheaterRaw : 1, 1, numPlayers - 1);
+        hiddenCheatMode = cheaterValue === 'best' ? 'best-hand' : 'fixed';
+        const logHandsEl = byId('test-log-hands');
+        const fixedSeedEl = byId('test-fixed-seed');
+        const seedEl = byId('test-seed-value');
+        testLogHands = logHandsEl ? !!logHandsEl.checked : false;
+        testAllowTriples = !!(byId('test-allow-triples') && byId('test-allow-triples').checked);
+        testFixedSeedEnabled = fixedSeedEl ? !!fixedSeedEl.checked : true;
+        testSeedText = (seedEl && seedEl.value.trim()) || '20260504-v9E';
         testBaseSeed = hashSeedString(testSeedText);
         testAiRng = testFixedSeedEnabled ? mulberry32(deriveSeed(testBaseSeed, 'ai-jitter')) : null;
         const aiChoice = byId('test-ai-version') ? byId('test-ai-version').value : 'v10_hybrid_rollout_challenger';
@@ -1758,13 +1792,16 @@ function startTestMode() {
         testBadLossCounts = new Array(numPlayers).fill(0);
         testOneCardLossCounts = new Array(numPlayers).fill(0);
         testScoreStats = new Array(numPlayers).fill(0);
+        testCheatChosenCounts = new Array(numPlayers).fill(0);
+        testCheatWinCounts = new Array(numPlayers).fill(0);
+        testCurrentCheaterIdx = -1;
         testLogs = [];
         testCurrentLog = [];
         testTurnNo = 0;
 
         byId('setup-screen').style.display = 'none';
         byId('game-board').style.display = 'block';
-        byId('test-panel').style.display = 'block';
+        byId('test-panel').style.display = 'flex';
         byId('controls').style.display = 'none';
         byId('center-area').innerHTML = '';
         byId('test-log').value = '測試模式已啟動，準備發牌...';
@@ -1861,9 +1898,12 @@ function initGame(options = {}) {
     if (testMode && testFixedSeedEnabled) {
         const gameNoForSeed = testBatchPlayed + 1;
         currentDeckSeed = deriveSeed(testBaseSeed, `deck|players:${numPlayers}|game:${gameNoForSeed}`);
+        currentAiSeed = deriveSeed(testBaseSeed, `ai|players:${numPlayers}|game:${gameNoForSeed}`);
+        testAiRng = mulberry32(currentAiSeed);
         shuffle(deck, mulberry32(currentDeckSeed));
     } else {
         currentDeckSeed = 0;
+        currentAiSeed = 0;
         shuffle(deck);
     }
 
@@ -1876,7 +1916,6 @@ function initGame(options = {}) {
         if (i >= numPlayers * 13 && numPlayers < 4) break;
         players[i % numPlayers].hand.push(deck[i]);
     }
-
     let starter = -1;
     let minVal = 999;
     players.forEach((p, idx) => {
@@ -1899,6 +1938,12 @@ function initGame(options = {}) {
     isSuitSort = false;
     playedValues = new Set();
     playerMemory = Array.from({ length: numPlayers }, () => ({ passes: [] }));
+    hiddenCheatPlan = [];
+    hiddenCheatPlanCursor = 0;
+    hiddenCheaterAiIndex = chooseHiddenCheaterAiIndex();
+    if (testMode && testFixedSeedEnabled && currentAiSeed) {
+        testAiRng = mulberry32(currentAiSeed);
+    }
 
     const sortBtn = byId('btn-sort');
     if (sortBtn) sortBtn.innerText = '按花色排序';
@@ -1948,6 +1993,293 @@ function mulberry32(seed) {
 function aiTinyRandom() {
     if (testMode && testFixedSeedEnabled && typeof testAiRng === 'function') return testAiRng();
     return Math.random();
+}
+
+function chooseHiddenCheaterAiIndex() {
+    if (hiddenCheatMode === 'off' || numPlayers <= 1) return -1;
+    const aiPlayers = [];
+    for (let i = 1; i < numPlayers; i++) aiPlayers.push(i);
+    if (aiPlayers.length === 0) return -1;
+    if (hiddenCheatMode === 'fixed') {
+        const selected = aiPlayers.includes(fixedHiddenCheaterAiIndex) ? fixedHiddenCheaterAiIndex : aiPlayers[0];
+        primeHiddenCheatPlanForPlayer(selected);
+        return selected;
+    }
+    return chooseBestHandCheaterAi(aiPlayers);
+}
+
+function primeHiddenCheatPlanForPlayer(playerIdx) {
+    if (!testMode || !testFixedSeedEnabled || !currentAiSeed || playerIdx <= 0) return;
+    const result = simulateOracleWinnerForCheater(playerIdx, currentAiSeed);
+    setHiddenCheatPlanFromOracleResult(result, playerIdx);
+}
+
+function chooseBestHandCheaterAi(aiPlayers) {
+    if (testMode && testFixedSeedEnabled && currentAiSeed) {
+        const replay = chooseBestHandCheaterByReplay(aiPlayers);
+        if (replay && aiPlayers.includes(replay.playerIdx)) return replay.playerIdx;
+    }
+
+    const solved = chooseBestHandCheaterBySolver(aiPlayers);
+    if (solved && aiPlayers.includes(solved.playerIdx)) return solved.playerIdx;
+
+    const prediction = predictBestHandAiByOpenSimulation(aiPlayers);
+    if (prediction && aiPlayers.includes(prediction.playerIdx)) return prediction.playerIdx;
+
+    let bestIdx = aiPlayers[0];
+    let bestScore = -Infinity;
+    for (const idx of aiPlayers) {
+        const p = players[idx];
+        const score = p && p.hand ? evaluateHiddenCheatHandStrength(p.hand, idx) : -Infinity;
+        if (score > bestScore) {
+            bestScore = score;
+            bestIdx = idx;
+        }
+    }
+    return bestIdx;
+}
+
+function chooseBestHandCheaterByReplay(aiPlayers) {
+    const candidateRows = [];
+    for (const idx of aiPlayers) {
+        const result = simulateOracleWinnerForCheater(idx, currentAiSeed);
+        candidateRows.push({ idx, result });
+    }
+
+    let best = null;
+    for (const row of candidateRows) {
+        const idx = row.idx;
+        const result = row.result;
+        const score = (result.winner === idx ? 1800000 : 0) -
+            (result.winner === 0 ? 260000 : 0) -
+            (result.winner > 0 && result.winner !== idx ? 140000 : 0) -
+            result.cheaterRemain * 12000 +
+            result.humanRemain * 1800 +
+            evaluateHiddenCheatHandStrength(players[idx].hand, idx) * 0.02;
+        if (!best || score > best.score) best = { playerIdx: idx, score, result };
+    }
+    if (best) {
+        const source = candidateRows.find(row => row.idx === best.playerIdx);
+        setHiddenCheatPlanFromOracleResult(source && source.result, best.playerIdx);
+    }
+    return best;
+}
+
+function setHiddenCheatPlanFromOracleResult(result, playerIdx) {
+    hiddenCheatPlan = [];
+    hiddenCheatPlanCursor = 0;
+    if (!result || !Array.isArray(result.plan)) return;
+    hiddenCheatPlan = result.plan
+        .filter(step => step.playerIdx === playerIdx && Array.isArray(step.values))
+        .map(step => step.values.slice().sort((a, b) => a - b));
+}
+
+function simulateOracleWinnerForCheater(cheaterIdx, aiSeed) {
+    const snapshot = createOracleSnapshot();
+    let winner = -1;
+    try {
+        hiddenCheaterAiIndex = cheaterIdx;
+        if (aiSeed) testAiRng = mulberry32(aiSeed);
+        const plan = [];
+        let safety = 0;
+        while (gameActive && safety < 700) {
+            const action = chooseTestAutoActionForPlayer(currentPlayer);
+            if (action && action.move) {
+                plan.push({
+                    playerIdx: currentPlayer,
+                    values: action.move.cards.map(c => c.value).sort((a, b) => a - b)
+                });
+            }
+            winner = applyOracleAction(action);
+            if (winner >= 0) break;
+            safety++;
+        }
+        return {
+            winner,
+            cheaterRemain: players[cheaterIdx] ? players[cheaterIdx].hand.length : 99,
+            humanRemain: players[0] ? players[0].hand.length : 99,
+            plan
+        };
+    } finally {
+        restoreOracleSnapshot(snapshot);
+    }
+}
+
+function createOracleSnapshot() {
+    return {
+        players: players.map(p => ({
+            id: p.id,
+            name: p.name,
+            isHuman: p.isHuman,
+            openingPlanV8C: p.openingPlanV8C,
+            hand: p.hand.map(c => {
+                const copy = new Card(c.rank, c.suitIdx);
+                copy.selected = !!c.selected;
+                return copy;
+            })
+        })),
+        currentPlayer,
+        lastPlayedCards: lastPlayedCards ? { ...lastPlayedCards } : null,
+        passCount,
+        openingControlOwner,
+        openingControlStreak,
+        gameActive,
+        isFirstRound,
+        startCardValue,
+        playedValues: new Set(playedValues),
+        playerMemory: playerMemory.map(mem => ({ passes: mem.passes.map(p => ({ ...p })) })),
+        hiddenCheaterAiIndex,
+        hiddenCheatPlan: hiddenCheatPlan.map(values => values.slice()),
+        hiddenCheatPlanCursor,
+        testAiRng
+    };
+}
+
+function restoreOracleSnapshot(snapshot) {
+    players = snapshot.players;
+    currentPlayer = snapshot.currentPlayer;
+    lastPlayedCards = snapshot.lastPlayedCards;
+    passCount = snapshot.passCount;
+    openingControlOwner = snapshot.openingControlOwner;
+    openingControlStreak = snapshot.openingControlStreak;
+    gameActive = snapshot.gameActive;
+    isFirstRound = snapshot.isFirstRound;
+    startCardValue = snapshot.startCardValue;
+    playedValues = new Set(snapshot.playedValues);
+    playerMemory = snapshot.playerMemory.map(mem => ({ passes: mem.passes.map(p => ({ ...p })) }));
+    hiddenCheaterAiIndex = snapshot.hiddenCheaterAiIndex;
+    hiddenCheatPlan = snapshot.hiddenCheatPlan.map(values => values.slice());
+    hiddenCheatPlanCursor = snapshot.hiddenCheatPlanCursor;
+    testAiRng = snapshot.testAiRng;
+}
+
+function applyOracleAction(action) {
+    const playerIdx = currentPlayer;
+    if (action && action.move) {
+        const p = players[playerIdx];
+        const move = action.move;
+        const vals = new Set(move.cards.map(c => c.value));
+        const wasOpeningRound = !lastPlayedCards;
+        p.hand = p.hand.filter(c => !vals.has(c.value));
+        move.cards.forEach(c => playedValues.add(c.value));
+        if (p.hand.length === 0) {
+            gameActive = false;
+            return playerIdx;
+        }
+        if (wasOpeningRound) updateOpeningControlStreak(playerIdx);
+        lastPlayedCards = { ...move.pattern, owner: playerIdx, cardsText: formatCards(move.cards) };
+        passCount = 0;
+        if (isFirstRound) isFirstRound = false;
+        currentPlayer = (currentPlayer + 1) % numPlayers;
+        return -1;
+    }
+
+    if (lastPlayedCards) recordPass(playerIdx, lastPlayedCards);
+    passCount++;
+    if (passCount >= numPlayers - 1) {
+        lastPlayedCards = null;
+        passCount = 0;
+    }
+    currentPlayer = (currentPlayer + 1) % numPlayers;
+    return -1;
+}
+
+function chooseBestHandCheaterBySolver(aiPlayers) {
+    if (!players || players.length === 0) return null;
+    const hands = players.map(p => [...p.hand].sort((a, b) => a.value - b.value));
+    const openingCardValue = Math.min(...hands.flatMap(hand => hand.map(c => c.value)));
+    const starter = hands.findIndex(hand => hand.some(c => c.value === openingCardValue));
+    let best = null;
+    const depth = testMode ? 4 : 6;
+
+    for (const idx of aiPlayers) {
+        const score = solvePeekState(hands, starter, null, true, 0, idx, depth, openingCardValue, new Map());
+        const handScore = evaluateHiddenCheatHandStrength(players[idx].hand, idx) * 0.02;
+        const total = score + handScore;
+        if (!best || total > best.score) best = { playerIdx: idx, score: total };
+    }
+    return best;
+}
+
+function predictBestHandAiByOpenSimulation(aiPlayers) {
+    const hands = players.map(p => [...p.hand].sort((a, b) => a.value - b.value));
+    const openingCardValue = Math.min(...hands.flatMap(hand => hand.map(c => c.value)));
+    let cur = hands.findIndex(hand => hand.some(c => c.value === openingCardValue));
+    let table = null;
+    let first = true;
+    let passN = 0;
+    let bestFallback = null;
+
+    function applyMoveLocal(playerIdx, move) {
+        const vals = new Set(move.cards.map(c => c.value));
+        hands[playerIdx] = hands[playerIdx].filter(c => !vals.has(c.value));
+        table = { ...move.pattern, owner: playerIdx };
+        passN = 0;
+        first = false;
+    }
+
+    for (let step = 0; step < 140; step++) {
+        const legal = generateRolloutLegalMovesV10(hands[cur], table, first, openingCardValue);
+        const move = legal.length > 0 ? chooseRolloutMoveV5(legal, hands, cur, table, first) : null;
+        if (move) {
+            applyMoveLocal(cur, move);
+            if (hands[cur].length === 0) {
+                if (aiPlayers.includes(cur)) return { playerIdx: cur, reason: 'predicted-winner' };
+                break;
+            }
+        } else if (table && !first) {
+            passN += 1;
+            if (passN >= numPlayers - 1) {
+                table = null;
+                passN = 0;
+            }
+        } else {
+            passN += 1;
+        }
+        cur = (cur + 1) % numPlayers;
+    }
+
+    for (const idx of aiPlayers) {
+        const remain = hands[idx] ? hands[idx].length : 99;
+        const score = -remain * 1000 + evaluateHiddenCheatHandStrength(players[idx].hand, idx) * 0.01;
+        if (!bestFallback || score > bestFallback.score) bestFallback = { playerIdx: idx, score };
+    }
+    return bestFallback;
+}
+
+function evaluateHiddenCheatHandStrength(hand, playerIdx) {
+    if (!hand || hand.length === 0) return -Infinity;
+    const plan = estimateMoveCountLite(hand);
+    const shape = evaluateHandShapeFast(hand);
+    const controls = countControlCards(hand);
+    const twos = countTwos(hand);
+    const highCards = hand.filter(c => c.rank === '2' || c.rank === 'A' || c.rank === 'K').length;
+    const hands = players.map(p => p.hand);
+    const moveCache = buildExactOpponentMoveCache(playerIdx, hands);
+    const allMoves = generateAllMoves(hand);
+    let score = 0;
+    score -= plan * 780;
+    score += shape * 1.7;
+    score += controls * 210;
+    score += twos * 360;
+    score += highCards * 90;
+    if (canBeOneMove(hand)) score += 4000;
+    if (canFinishInTwoMovesV5(hand)) score += 2600;
+
+    const openingCardValue = Math.min(...players.flatMap(p => p.hand.map(c => c.value)));
+    if (hand.some(c => c.value === openingCardValue)) score += 950;
+
+    for (const move of allMoves) {
+        const after = hand.filter(c => !move.cards.includes(c));
+        const info = getExactOpponentResponseInfo(move, playerIdx, hands, moveCache);
+        const unbeatable = info.opponentsCanBeat === 0;
+        if (unbeatable) score += 180 + move.cards.length * 35;
+        if (unbeatable && canBeOneMove(after)) score += 5200;
+        if (unbeatable && canFinishInTwoMovesV5(after)) score += 2200;
+        if (after.length <= 4 && canBeOneMove(after)) score += 950;
+        if (move.pattern.len === 5 && move.pattern.comboRank >= FIVE_CARD_POWER.fullhouse) score += 130;
+    }
+    return score;
 }
 
 function checkTurn() {
@@ -2136,9 +2468,141 @@ function aiSmartTurn() {
 }
 
 function simulateAITurn() {
-    const action = chooseAIAction(currentPlayer);
+    const action = testMode ? chooseTestAutoActionForPlayer(currentPlayer) : chooseAIAction(currentPlayer);
     if (action && action.move) playCards(currentPlayer, action.move.cards, action.move.pattern, true);
     else passTurn(true);
+}
+
+function chooseTestAutoActionForPlayer(playerIdx) {
+    if (playerIdx === 0) return chooseTestHumanAutoAction();
+    if (playerIdx !== hiddenCheaterAiIndex) return chooseTestNormalAiAutoAction(playerIdx);
+    return chooseAIAction(playerIdx);
+}
+
+function chooseTestHumanAutoAction() {
+    const p = players[0];
+    const legalMoves = generateLegalMoves(p.hand, lastPlayedCards, isFirstRound, startCardValue);
+    if (legalMoves.length === 0) return null;
+
+    const sorted = [...legalMoves].sort((a, b) => {
+        const as = scoreTestHumanAutoMove(a);
+        const bs = scoreTestHumanAutoMove(b);
+        return as - bs;
+    });
+    return { move: sorted[0], score: -scoreTestHumanAutoMove(sorted[0]) };
+}
+
+function scoreTestHumanAutoMove(move) {
+    const after = players[0].hand.filter(c => !move.cards.includes(c));
+    if (after.length === 0) return -100000;
+    let score = getStrengthCost(move.pattern);
+    if (!lastPlayedCards) {
+        score += move.cards.length * 120;
+        if (move.pattern.type === 'single') score -= 60;
+    } else {
+        score += move.cards.length * 25;
+    }
+    if (move.cards.some(c => c.rank === '2')) score += 260;
+    if (move.cards.some(c => c.rank === 'A')) score += 90;
+    return score;
+}
+
+function chooseTestNormalAiAutoAction(playerIdx) {
+    const p = players[playerIdx];
+    if (!p) return null;
+    const legalMoves = generateLegalMoves(p.hand, lastPlayedCards, isFirstRound, startCardValue);
+    if (legalMoves.length === 0) return null;
+
+    const state = buildAIState(playerIdx);
+    let best = null;
+    let bestScore = -Infinity;
+    for (const move of legalMoves) {
+        const score = scoreTestNormalAiAutoMove(move, state);
+        move.aiScore = score;
+        move.pattern.aiScore = score;
+        move.pattern.aiMode = 'test-normal';
+        if (score > bestScore) {
+            bestScore = score;
+            best = move;
+        }
+    }
+
+    if (!isFirstRound && lastPlayedCards) {
+        const passScore = scoreTestNormalAiAutoPass(state);
+        if (passScore > bestScore) return null;
+    }
+
+    return { move: best, score: bestScore, mode: 'test-normal' };
+}
+
+function scoreTestNormalAiAutoMove(move, state) {
+    const before = state.hand;
+    const after = before.filter(c => !move.cards.includes(c));
+    if (after.length === 0) return 100000;
+
+    const pat = move.pattern;
+    const beforePlan = estimateMoveCountLite(before);
+    const afterPlan = estimateMoveCountLite(after);
+    const info = getOpponentResponseInfoLite(move, state);
+    const rank = Math.floor((pat.val || 0) / 4);
+    const controlsUsed = move.cards.filter(c => c.rank === '2' || c.rank === 'A' || c.rankVal >= VALUES['K']).length;
+    const twosUsed = move.cards.filter(c => c.rank === '2').length;
+    const urgent = state.lowestOpponentCards <= 3 || state.anyOpponentLastCard || after.length <= 4;
+
+    let score = 0;
+    score += (beforePlan - afterPlan) * 135;
+    score += move.cards.length * 34;
+    score -= getStrengthCost(pat) * 0.78;
+    score -= info.opponentsCanBeat * 32;
+    if (pat.type === 'triple' && after.length > 0) score -= 260;
+
+    if (after.length <= 5 && canBeOneMove(after)) score += 520;
+    if (after.length <= 7 && canFinishInTwoMovesV5(after)) score += 290;
+
+    if (state.isOpening) {
+        if (pat.type === 'single' && rank <= VALUES['8']) score += 42;
+        if (pat.type === 'pair' && rank <= VALUES['10']) score += 44;
+        if (pat.type === 'single' && rank >= VALUES['K'] && after.length > 2) score -= 125;
+        if (pat.len === 5 && afterPlan <= beforePlan) score += 60;
+    } else {
+        score += 55;
+        if (state.lastOwnerCards <= 2) score += 140;
+        if (info.opponentsCanBeat === 0 && after.length <= 5) score += 260;
+    }
+
+    if (state.anyOpponentLastCard) {
+        score += state.isFollowing ? 130 : -70;
+        if (pat.type === 'single') score += 70;
+        if (info.opponentsCanBeat === 0) score += 90;
+    }
+    if (state.anyOpponentTwoCards && pat.type === 'pair') score += 120;
+
+    if (!urgent) {
+        score -= twosUsed * 260;
+        score -= Math.max(0, controlsUsed - twosUsed) * 75;
+    } else if (state.isFollowing) {
+        score += twosUsed * 100;
+        score += Math.max(0, controlsUsed - twosUsed) * 30;
+    }
+
+    return score;
+}
+
+function scoreTestNormalAiAutoPass(state) {
+    let score = 12;
+    if (state.lowestOpponentCards <= 2) score -= 230;
+    if (state.anyOpponentLastCard) score -= 170;
+    if (state.lag >= 4) score -= 70 + state.lag * 8;
+    if (state.lastOwnerCards <= 2) score -= 155;
+
+    if (lastPlayedCards) {
+        const rank = Math.floor((lastPlayedCards.val || 0) / 4);
+        if (lastPlayedCards.type === 'single' && rank >= VALUES['K']) score += 120;
+        if (lastPlayedCards.type === 'pair' && rank >= VALUES['Q']) score += 95;
+        if (lastPlayedCards.len === 5 && lastPlayedCards.comboRank >= FIVE_CARD_POWER.fullhouse) score += 90;
+    }
+
+    return score;
 }
 
 function chooseAIAction(playerIdx) {
@@ -2147,6 +2611,10 @@ function chooseAIAction(playerIdx) {
     if (legalMoves.length === 0) return null;
 
     const state = buildAIState(playerIdx);
+    if (playerIdx === hiddenCheaterAiIndex) {
+        const cheatAction = chooseAIActionHeavyCheat(legalMoves, state);
+        if (cheatAction) return cheatAction;
+    }
     if (state.aiVersion === 'v10_hybrid_rollout_challenger') return chooseAIActionV10HybridRollout(legalMoves, state);
     if (state.aiVersion === 'v9e_endsolver_challenger') return chooseAIActionV9EEndSolver(legalMoves, state);
     if (state.aiVersion === 'v9e_seedtest_challenger' || state.aiVersion === 'v9e_balance_challenger') return chooseAIActionV9EBalance(legalMoves, state);
@@ -2179,6 +2647,773 @@ function chooseAIAction(playerIdx) {
     }
 
     return { move: best, score: bestScore };
+}
+
+function chooseAIActionHeavyCheat(legalMoves, state) {
+    const decisive = chooseDecisivePeekMove(legalMoves, state);
+    if (decisive) return decisive;
+
+    const realtime = chooseHeavyCheatRealtimeAction(legalMoves, state);
+    if (realtime) return realtime;
+
+    const planned = chooseHiddenCheatPlannedMove(legalMoves);
+    if (planned) return planned;
+
+    const base = chooseAIActionV10HybridRollout(legalMoves, state);
+    if (base && base.move) {
+        base.move.pattern.aiMode = (base.move.pattern.aiMode || 'v10') + '+peek';
+        return base;
+    }
+    return null;
+}
+
+function chooseHeavyCheatRealtimeAction(legalMoves, state) {
+    if (!legalMoves || legalMoves.length === 0) return null;
+
+    const urgency = buildHeavyCheatUrgency(state);
+    const plannedMove = peekHiddenCheatPlannedMove(legalMoves);
+    const rows = getHeavyCheatCandidateRows(legalMoves, state, urgency, plannedMove);
+    if (!rows.length) return null;
+
+    let best = null;
+    let bestScore = -Infinity;
+    const maxRows = testMode ? 36 : 28;
+    const maxSteps = testMode ? 180 : 130;
+
+    for (const row of rows.slice(0, maxRows)) {
+        const result = rolloutAfterCandidateHeavyCheat(row.move, state, maxSteps);
+        const rolloutScore = scoreHeavyCheatRolloutResult(result, state);
+        const score = row.score + rolloutScore;
+        if (score > bestScore) {
+            bestScore = score;
+            best = row.move;
+        }
+    }
+
+    if (!isFirstRound && lastPlayedCards) {
+        const passResult = rolloutAfterPassHeavyCheat(state, maxSteps);
+        const passScore = scoreHeavyCheatRolloutResult(passResult, state) - 1200;
+        if (passScore > bestScore) {
+            return { move: null, score: passScore, mode: 'peek-pass-rollout' };
+        }
+    }
+
+    if (!best) return null;
+    if (shouldHeavyCheatPass(best, bestScore, state, urgency)) {
+        return { move: null, score: bestScore, mode: 'peek-pass' };
+    }
+
+    best.aiScore = bestScore;
+    best.pattern.aiScore = bestScore;
+    best.pattern.aiMode = 'peek-realtime';
+    return { move: best, score: bestScore, mode: 'peek-realtime' };
+}
+
+function chooseHiddenCheatPlannedMove(legalMoves) {
+    if (!hiddenCheatPlan || hiddenCheatPlanCursor >= hiddenCheatPlan.length) return null;
+    while (hiddenCheatPlanCursor < hiddenCheatPlan.length) {
+        const values = hiddenCheatPlan[hiddenCheatPlanCursor++];
+        const move = legalMoves.find(m => sameCardValueSet(m.cards, values));
+        if (move) {
+            move.aiScore = 2000000;
+            move.pattern.aiScore = 2000000;
+            move.pattern.aiMode = 'peek-plan';
+            return { move, score: 2000000, mode: 'peek-plan' };
+        }
+    }
+    return null;
+}
+
+function peekHiddenCheatPlannedMove(legalMoves) {
+    if (!hiddenCheatPlan || hiddenCheatPlanCursor >= hiddenCheatPlan.length) return null;
+    for (let i = hiddenCheatPlanCursor; i < hiddenCheatPlan.length; i++) {
+        const values = hiddenCheatPlan[i];
+        const move = legalMoves.find(m => sameCardValueSet(m.cards, values));
+        if (move) return move;
+    }
+    return null;
+}
+
+function sameCardValueSet(cards, values) {
+    if (!cards || !values || cards.length !== values.length) return false;
+    const a = cards.map(c => c.value).sort((x, y) => x - y);
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== values[i]) return false;
+    }
+    return true;
+}
+
+function chooseSolvedPeekAction(legalMoves, state) {
+    if (!legalMoves || legalMoves.length === 0) return null;
+    const focus = state.playerIdx;
+    const hands = players.map(p => [...p.hand].sort((a, b) => a.value - b.value));
+    const depth = getPeekSolverDepth(hands[focus].length);
+    const openingCardValue = startCardValue;
+    const table = lastPlayedCards ? { ...lastPlayedCards } : null;
+    const first = isFirstRound;
+    const candidates = getPeekSolverMoveCandidates(legalMoves, hands, focus, table, first, true);
+    let bestMove = null;
+    let bestScore = -Infinity;
+    const memo = new Map();
+
+    for (const move of candidates) {
+        const next = applyPeekMoveState(hands, focus, move, false);
+        const score = solvePeekState(next.hands, (focus + 1) % numPlayers, next.table, false, 0, focus, depth - 1, openingCardValue, memo);
+        const total = score + peekMoveStaticBonus(move, hands[focus], focus, hands, table) * 0.35;
+        if (total > bestScore) {
+            bestScore = total;
+            bestMove = move;
+        }
+    }
+
+    if (table && !first) {
+        const passState = applyPeekPassState(hands, focus, table, passCount, first);
+        const passScore = solvePeekState(passState.hands, (focus + 1) % numPlayers, passState.table, passState.first, passState.passN, focus, depth - 1, openingCardValue, memo) - 700;
+        if (passScore > bestScore) return null;
+    }
+
+    if (!bestMove) return null;
+    bestMove.aiScore = bestScore;
+    bestMove.pattern.aiScore = bestScore;
+    bestMove.pattern.aiMode = 'peek-solver';
+    return { move: bestMove, score: bestScore, mode: 'peek-solver' };
+}
+
+function getPeekSolverDepth(myCount) {
+    if (myCount <= 4) return testMode ? 7 : 10;
+    if (myCount <= 7) return testMode ? 6 : 8;
+    return testMode ? 5 : 7;
+}
+
+function solvePeekState(handsInput, cur, table, first, passN, focus, depth, openingCardValue, memo) {
+    const hands = handsInput;
+    if (hands[focus].length === 0) return 1000000 + depth * 2000;
+    for (let i = 0; i < numPlayers; i++) {
+        if (i !== focus && hands[i].length === 0) return -1000000 - hands[focus].length * 9000;
+    }
+    if (depth <= 0) return evaluatePeekStateHeuristic(hands, focus, table);
+
+    const key = buildPeekStateKey(hands, cur, table, first, passN, focus, depth);
+    if (memo.has(key)) return memo.get(key);
+
+    const legal = generateRolloutLegalMovesV10(hands[cur], table, first, openingCardValue);
+    const isFocusTurn = cur === focus;
+    let best = isFocusTurn ? -Infinity : Infinity;
+
+    if (legal.length > 0) {
+        const candidates = getPeekSolverMoveCandidates(legal, hands, cur, table, first, isFocusTurn);
+        for (const move of candidates) {
+            const next = applyPeekMoveState(hands, cur, move, false);
+            const child = solvePeekState(next.hands, (cur + 1) % numPlayers, next.table, false, 0, focus, depth - 1, openingCardValue, memo);
+            const score = child + peekMoveStaticBonus(move, hands[cur], cur, hands, table) * (isFocusTurn ? 0.22 : -0.08);
+            if (isFocusTurn) best = Math.max(best, score);
+            else best = Math.min(best, score);
+        }
+    }
+
+    if (table && !first) {
+        const next = applyPeekPassState(hands, cur, table, passN, first);
+        const child = solvePeekState(next.hands, (cur + 1) % numPlayers, next.table, next.first, next.passN, focus, depth - 1, openingCardValue, memo);
+        const passScore = child + (isFocusTurn ? -650 : 180);
+        if (isFocusTurn) best = Math.max(best, passScore);
+        else best = Math.min(best, passScore);
+    }
+
+    if (!Number.isFinite(best)) best = evaluatePeekStateHeuristic(hands, focus, table);
+    memo.set(key, best);
+    return best;
+}
+
+function getPeekSolverMoveCandidates(legal, hands, cur, table, first, isFocusTurn) {
+    const limit = isFocusTurn ? (testMode ? 5 : 8) : (testMode ? 2 : 4);
+    return [...legal]
+        .sort((a, b) => peekMoveStaticBonus(b, hands[cur], cur, hands, table) - peekMoveStaticBonus(a, hands[cur], cur, hands, table))
+        .slice(0, Math.min(limit, legal.length));
+}
+
+function peekMoveStaticBonus(move, hand, cur, hands, table) {
+    const after = hand.filter(c => !move.cards.includes(c));
+    const info = getLocalOpponentResponseInfo(move, cur, hands);
+    let score = 0;
+    if (after.length === 0) score += 100000;
+    score += move.cards.length * 520;
+    score += (estimateMoveCountLite(hand) - estimateMoveCountLite(after)) * 1800;
+    score -= getStrengthCost(move.pattern) * 0.34;
+    if (info.opponentsCanBeat === 0) score += 5200;
+    if (info.opponentsCanBeat === 0 && canBeOneMove(after)) score += 17000;
+    if (canBeOneMove(after)) score += 5200;
+    if (canFinishInTwoMovesV5(after)) score += 2600;
+    if (info.replyFinishers.length > 0) score -= 6500;
+    if (table && table.owner !== cur) score += 900;
+    if (hands[0] && hands[0].length <= 2 && !info.humanCanBeat) score += 1600;
+    return score;
+}
+
+function applyPeekMoveState(hands, playerIdx, move) {
+    const vals = new Set(move.cards.map(c => c.value));
+    const nextHands = hands.map((hand, idx) => idx === playerIdx ? hand.filter(c => !vals.has(c.value)) : hand);
+    return {
+        hands: nextHands,
+        table: { ...move.pattern, owner: playerIdx }
+    };
+}
+
+function applyPeekPassState(hands, playerIdx, table, passN, first) {
+    let nextTable = table;
+    let nextPass = passN;
+    if (table && !first) {
+        nextPass += 1;
+        if (nextPass >= numPlayers - 1) {
+            nextTable = null;
+            nextPass = 0;
+        }
+    } else {
+        nextPass += 1;
+    }
+    return { hands, table: nextTable, passN: nextPass, first };
+}
+
+function evaluatePeekStateHeuristic(hands, focus, table) {
+    const myHand = hands[focus] || [];
+    const opponents = hands.filter((_, idx) => idx !== focus);
+    const minOpp = Math.min(...opponents.map(h => h.length));
+    const myPlan = estimateMoveCountLite(myHand);
+    const oppPlans = opponents.map(h => estimateMoveCountLite(h));
+    let score = 0;
+    score += (minOpp - myHand.length) * 9500;
+    score += (Math.min(...oppPlans) - myPlan) * 18000;
+    score += evaluateHandShapeFast(myHand) * 9;
+    score += countControlCards(myHand) * 2400;
+    if (canBeOneMove(myHand)) score += 32000;
+    if (canFinishInTwoMovesV5(myHand)) score += 16000;
+    if (table && table.owner === focus) score += 6000;
+    return score;
+}
+
+function buildPeekStateKey(hands, cur, table, first, passN, focus, depth) {
+    const h = hands.map(hand => hand.map(c => c.value).sort((a, b) => a - b).join('.')).join('|');
+    const t = table ? `${table.type}:${table.len}:${table.val}:${table.comboRank || 0}:${table.owner}` : 'n';
+    return `${depth}/${focus}/${cur}/${first ? 1 : 0}/${passN}/${t}/${h}`;
+}
+
+function chooseDecisivePeekMove(legalMoves, state) {
+    let best = null;
+    let bestScore = -Infinity;
+    const hands = players.map(p => p.hand);
+    const moveCache = buildExactOpponentMoveCache(state.playerIdx, hands);
+    const urgentOwner = lastPlayedCards && players[lastPlayedCards.owner] && lastPlayedCards.owner !== state.playerIdx
+        ? players[lastPlayedCards.owner]
+        : null;
+
+    for (const move of legalMoves) {
+        const after = state.hand.filter(c => !move.cards.includes(c));
+        const info = getExactOpponentResponseInfo(move, state.playerIdx, hands, moveCache);
+        const unbeatable = info.opponentsCanBeat === 0;
+        let score = -Infinity;
+
+        if (after.length === 0) score = 10000000;
+        else if (unbeatable && canBeOneMove(after)) score = 700000 + getStrengthCost(move.pattern) * -2;
+        else if (unbeatable && canFinishInTwoMovesV5(after) && after.length <= 6) score = 360000 - after.length * 2000;
+        else if (state.isFollowing && urgentOwner && urgentOwner.hand.length <= 2 && unbeatable) score = 260000 - after.length * 1200;
+        else if (state.isOpening && players[0] && players[0].hand.length <= 2 && !info.humanCanBeat) score = 180000 - after.length * 1000;
+
+        if (score > bestScore) {
+            bestScore = score;
+            best = move;
+        }
+    }
+
+    if (!best || bestScore < 0) return null;
+    best.aiScore = bestScore;
+    best.pattern.aiScore = bestScore;
+    best.pattern.aiMode = 'peek-decisive';
+    return { move: best, score: bestScore, mode: 'peek-decisive' };
+}
+
+function getHeavyCheatCandidateRows(legalMoves, state, urgency, baseMove) {
+    const opponentMoveCache = buildExactOpponentMoveCache(state.playerIdx, players.map(p => p.hand));
+    const rows = legalMoves.map(move => ({
+        move,
+        score: scoreHeavyCheatMove(move, state, opponentMoveCache, urgency)
+    }));
+
+    if (baseMove && !rows.some(row => sameMoveCardsV10(row.move, baseMove))) {
+        rows.push({
+            move: baseMove,
+            score: scoreHeavyCheatMove(baseMove, state, opponentMoveCache, urgency)
+        });
+    }
+
+    const strategic = [];
+    for (const row of rows) {
+        const afterHand = state.hand.filter(c => !row.move.cards.includes(c));
+        const info = getExactOpponentResponseInfo(row.move, state.playerIdx, players.map(p => p.hand), opponentMoveCache);
+        const immediateWin = afterHand.length === 0;
+        const keepsControl = info.opponentsCanBeat === 0;
+        const oneMoreHand = afterHand.length > 0 && canBeOneMove(afterHand);
+        const twoMoreHands = afterHand.length > 0 && canFinishInTwoMovesV5(afterHand);
+        const blocksShortHuman = urgency.humanCards <= 2 && !info.humanCanBeat;
+        const answersDanger = state.isFollowing && lastPlayedCards && players[lastPlayedCards.owner] && players[lastPlayedCards.owner].hand.length <= 3;
+
+        if (immediateWin || keepsControl || oneMoreHand || twoMoreHands || blocksShortHuman || answersDanger) {
+            strategic.push(row);
+        }
+    }
+
+    rows.sort((a, b) => b.score - a.score);
+    strategic.sort((a, b) => b.score - a.score);
+    return dedupeCheatMoveRows([
+        ...strategic.slice(0, testMode ? 18 : 26),
+        ...rows.slice(0, testMode ? 36 : 40)
+    ]);
+}
+
+function buildHeavyCheatUrgency(state) {
+    const human = players[0];
+    const tableOwner = lastPlayedCards && players[lastPlayedCards.owner] ? players[lastPlayedCards.owner] : null;
+    const opponents = players.filter(p => p.id !== state.playerIdx);
+    const anyOpponentCanFinish = opponents.some(p => p.hand.length > 0 && canBeOneMove(p.hand));
+    return {
+        humanCards: human ? human.hand.length : 99,
+        humanCanFinish: !!(human && human.hand.length > 0 && canBeOneMove(human.hand)),
+        anyOpponentCanFinish,
+        tableOwnerCards: tableOwner ? tableOwner.hand.length : 99,
+        tableOwnerIsHuman: !!(tableOwner && tableOwner.id === 0),
+        tableOwnerCanFinish: !!(tableOwner && tableOwner.hand.length > 0 && canBeOneMove(tableOwner.hand)),
+        critical: state.lowestOpponentCards <= 3 || anyOpponentCanFinish || (human && human.hand.length <= 3)
+    };
+}
+
+function buildExactOpponentMoveCache(playerIdx, hands) {
+    const cache = new Map();
+    for (let i = 0; i < numPlayers; i++) {
+        if (i === playerIdx) continue;
+        cache.set(i, generateAllMoves(hands[i] || []));
+    }
+    return cache;
+}
+
+function getExactOpponentResponseInfo(move, playerIdx, hands, moveCache) {
+    const info = {
+        opponentsCanBeat: 0,
+        humanCanBeat: false,
+        humanReplyFinisher: false,
+        replyFinishers: [],
+        minResponseCost: Infinity
+    };
+
+    for (let i = 0; i < numPlayers; i++) {
+        if (i === playerIdx) continue;
+        const hand = hands[i] || [];
+        if (hand.length === 0) continue;
+        const allMoves = moveCache && moveCache.has(i) ? moveCache.get(i) : generateAllMoves(hand);
+        let canReply = false;
+
+        for (const reply of allMoves) {
+            if (!canBeat(reply.pattern, move.pattern)) continue;
+            canReply = true;
+            info.minResponseCost = Math.min(info.minResponseCost, getStrengthCost(reply.pattern));
+            if (reply.cards.length === hand.length) {
+                info.replyFinishers.push(i);
+                if (i === 0) info.humanReplyFinisher = true;
+            }
+        }
+
+        if (canReply) {
+            info.opponentsCanBeat += 1;
+            if (i === 0) info.humanCanBeat = true;
+        }
+    }
+
+    if (!Number.isFinite(info.minResponseCost)) info.minResponseCost = 0;
+    return info;
+}
+
+function scoreHeavyCheatMove(move, state, opponentMoveCache, urgency) {
+    const afterHand = state.hand.filter(c => !move.cards.includes(c));
+    if (afterHand.length === 0) return 10000000;
+
+    const pat = move.pattern;
+    const rank = Math.floor(pat.val / 4);
+    const beforePlan = estimateMoveCountLite(state.hand);
+    const afterPlan = estimateMoveCountLite(afterHand);
+    const hands = players.map(p => p.hand);
+    const info = getExactOpponentResponseInfo(move, state.playerIdx, hands, opponentMoveCache);
+    const unbeatable = info.opponentsCanBeat === 0;
+    const controlsUsed = move.cards.filter(c => c.rank === '2' || c.rank === 'A' || c.rankVal >= VALUES['K']).length;
+
+    let score = 0;
+    score += (beforePlan - afterPlan) * 1450;
+    score += move.cards.length * 240;
+    score += evaluateHandShapeFast(afterHand) * 0.24;
+    score -= getStrengthCost(pat) * 0.38;
+
+    if (canBeOneMove(afterHand)) score += 6200;
+    if (canFinishInTwoMovesV5(afterHand)) score += 3100;
+    if (afterHand.length <= 2) score += 2100;
+    else if (afterHand.length <= 4) score += 1050;
+
+    if (unbeatable) {
+        score += 5600;
+        if (state.isFollowing) score += 1250;
+        if (afterPlan <= 2) score += 3600;
+        if (canBeOneMove(afterHand)) score += 9000;
+        if (urgency.critical) score += 1400;
+    } else {
+        score -= info.opponentsCanBeat * 190;
+        score -= Math.max(0, 140 - info.minResponseCost) * 0.45;
+    }
+
+    if (info.replyFinishers.length > 0) score -= 4200 + info.replyFinishers.length * 700;
+    if (info.humanReplyFinisher) score -= 5200;
+    if (info.humanCanBeat) score -= urgency.humanCards <= 3 ? 1500 : 220;
+    else if (urgency.humanCards <= 3) score += 2300;
+
+    if (state.isFollowing && lastPlayedCards) {
+        const owner = players[lastPlayedCards.owner];
+        score += 820;
+        if (owner && owner.id === 0) score += 1150 + Math.max(0, 6 - urgency.humanCards) * 360;
+        if (owner && owner.hand.length <= 3) score += 1600;
+        if (owner && canBeOneMove(owner.hand)) score += 2100;
+        if (unbeatable) score += 1900;
+    }
+
+    if (state.isOpening) {
+        if (!urgency.critical && pat.type === 'single' && rank <= VALUES['8']) score += 95;
+        if (!urgency.critical && pat.type === 'pair' && rank <= VALUES['10']) score += 80;
+        if (pat.type === 'single' && rank >= VALUES['K'] && afterPlan > 2 && !unbeatable) score -= 260;
+
+        if (urgency.humanCards === 1) {
+            if (pat.type === 'single') score += info.humanCanBeat ? -2600 : 4300;
+            else score += 2600;
+        } else if (urgency.humanCards === 2) {
+            if (pat.type === 'pair') score += info.humanCanBeat ? -1800 : 3800;
+            else if (pat.type !== 'single') score += 1900;
+        }
+    }
+
+    if (urgency.anyOpponentCanFinish) {
+        if (unbeatable) score += 2300;
+        if (state.isFollowing) score += 1700;
+        if (!unbeatable && info.replyFinishers.length > 0) score -= 1200;
+    }
+
+    if (controlsUsed > 0) {
+        if (unbeatable || urgency.critical || afterPlan <= 2) score += controlsUsed * 260;
+        else score -= controlsUsed * 90;
+    }
+
+    return score;
+}
+
+function dedupeCheatMoveRows(rows) {
+    const seen = new Set();
+    const out = [];
+    for (const row of rows) {
+        if (!row || !row.move) continue;
+        const key = row.move.cards.map(c => c.value).sort((a, b) => a - b).join('-');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(row);
+    }
+    return out;
+}
+
+function shouldHeavyCheatPass(best, bestScore, state, urgency) {
+    if (!lastPlayedCards || isFirstRound || !best) return false;
+    const owner = players[lastPlayedCards.owner];
+    if (!owner || owner.id === state.playerIdx) return false;
+    if (owner.id === 0 && owner.hand.length <= 5) return false;
+    if (owner.hand.length <= 3 || canBeOneMove(owner.hand)) return false;
+    if (urgency.critical || urgency.humanCanFinish) return false;
+    return bestScore < -120;
+}
+
+function rolloutAfterCandidateHeavyCheat(candidateMove, state, maxSteps = 96) {
+    const hands = players.map(p => [...p.hand]);
+    let table = lastPlayedCards ? { ...lastPlayedCards } : null;
+    let first = isFirstRound;
+    let passN = passCount;
+    let cur = state.playerIdx;
+    const me = state.playerIdx;
+
+    function applyMoveLocal(playerIdx, move) {
+        const vals = new Set(move.cards.map(c => c.value));
+        hands[playerIdx] = hands[playerIdx].filter(c => !vals.has(c.value));
+        table = { ...move.pattern, owner: playerIdx };
+        passN = 0;
+        first = false;
+    }
+
+    applyMoveLocal(me, candidateMove);
+    if (hands[me].length === 0) return buildHeavyCheatRolloutResult(hands, me, me);
+    cur = (me + 1) % numPlayers;
+
+    for (let step = 0; step < maxSteps; step++) {
+        const legal = generateRolloutLegalMovesV10(hands[cur], table, first, startCardValue);
+        let move = null;
+        if (legal.length > 0) {
+            move = cur === me
+                ? chooseHeavyCheatRolloutMove(legal, hands, cur, table, first)
+                : (testMode
+                    ? chooseTestNormalRolloutMove(legal, hands, cur, table, first)
+                    : chooseRolloutMoveV5(legal, hands, cur, table, first));
+        }
+
+        if (move) {
+            applyMoveLocal(cur, move);
+            if (hands[cur].length === 0) return buildHeavyCheatRolloutResult(hands, me, cur);
+        } else if (table && !first) {
+            passN += 1;
+            if (passN >= numPlayers - 1) {
+                table = null;
+                passN = 0;
+            }
+        } else {
+            passN += 1;
+        }
+        cur = (cur + 1) % numPlayers;
+    }
+
+    return buildHeavyCheatRolloutResult(hands, me, -1);
+}
+
+function rolloutAfterPassHeavyCheat(state, maxSteps = 120) {
+    const hands = players.map(p => [...p.hand]);
+    let table = lastPlayedCards ? { ...lastPlayedCards } : null;
+    let first = isFirstRound;
+    let passN = passCount;
+    const me = state.playerIdx;
+
+    if (table && !first) {
+        passN += 1;
+        if (passN >= numPlayers - 1) {
+            table = null;
+            passN = 0;
+        }
+    } else {
+        passN += 1;
+    }
+
+    let cur = (me + 1) % numPlayers;
+    for (let step = 0; step < maxSteps; step++) {
+        const legal = generateRolloutLegalMovesV10(hands[cur], table, first, startCardValue);
+        let move = null;
+        if (legal.length > 0) {
+            move = cur === me
+                ? chooseHeavyCheatRolloutMove(legal, hands, cur, table, first)
+                : (testMode
+                    ? chooseTestNormalRolloutMove(legal, hands, cur, table, first)
+                    : chooseRolloutMoveV5(legal, hands, cur, table, first));
+        }
+
+        if (move) {
+            const vals = new Set(move.cards.map(c => c.value));
+            hands[cur] = hands[cur].filter(c => !vals.has(c.value));
+            table = { ...move.pattern, owner: cur };
+            passN = 0;
+            first = false;
+            if (hands[cur].length === 0) return buildHeavyCheatRolloutResult(hands, me, cur);
+        } else if (table && !first) {
+            passN += 1;
+            if (passN >= numPlayers - 1) {
+                table = null;
+                passN = 0;
+            }
+        } else {
+            passN += 1;
+        }
+        cur = (cur + 1) % numPlayers;
+    }
+
+    return buildHeavyCheatRolloutResult(hands, me, -1);
+}
+
+function chooseTestNormalRolloutMove(legal, hands, cur, table, first) {
+    let best = null;
+    let bestScore = -Infinity;
+    for (const move of legal) {
+        const score = scoreTestNormalRolloutMove(move, hands, cur, table, first);
+        if (score > bestScore) {
+            bestScore = score;
+            best = move;
+        }
+    }
+
+    if (table && !first) {
+        const passScore = scoreTestNormalRolloutPass(hands, cur, table);
+        if (passScore > bestScore) return null;
+    }
+    return best;
+}
+
+function scoreTestNormalRolloutMove(move, hands, cur, table, first) {
+    const hand = hands[cur] || [];
+    const after = hand.filter(c => !move.cards.includes(c));
+    if (after.length === 0) return 100000;
+
+    const opponents = hands.filter((_, idx) => idx !== cur);
+    const minOpp = opponents.length ? Math.min(...opponents.map(h => h.length)) : 99;
+    const anyOpponentLast = opponents.some(h => h.length === 1);
+    const anyOpponentTwo = opponents.some(h => h.length === 2);
+    const info = getLocalOpponentResponseInfo(move, cur, hands);
+    const pat = move.pattern;
+    const rank = Math.floor((pat.val || 0) / 4);
+    const beforePlan = estimateMoveCountLite(hand);
+    const afterPlan = estimateMoveCountLite(after);
+    const controlsUsed = move.cards.filter(c => c.rank === '2' || c.rank === 'A' || c.rankVal >= VALUES['K']).length;
+    const twosUsed = move.cards.filter(c => c.rank === '2').length;
+    const urgent = minOpp <= 3 || anyOpponentLast || after.length <= 4;
+
+    let score = 0;
+    score += (beforePlan - afterPlan) * 135;
+    score += move.cards.length * 34;
+    score -= getStrengthCost(pat) * 0.78;
+    score -= info.opponentsCanBeat * 32;
+    if (pat.type === 'triple' && after.length > 0) score -= 260;
+
+    if (after.length <= 5 && canBeOneMove(after)) score += 520;
+    if (after.length <= 7 && canFinishInTwoMovesV5(after)) score += 290;
+
+    if (!table) {
+        if (pat.type === 'single' && rank <= VALUES['8']) score += 42;
+        if (pat.type === 'pair' && rank <= VALUES['10']) score += 44;
+        if (pat.type === 'single' && rank >= VALUES['K'] && after.length > 2) score -= 125;
+        if (pat.len === 5 && afterPlan <= beforePlan) score += 60;
+    } else {
+        score += 55;
+        const ownerHand = hands[table.owner] || [];
+        if (ownerHand.length <= 2) score += 140;
+        if (info.opponentsCanBeat === 0 && after.length <= 5) score += 260;
+    }
+
+    if (anyOpponentLast) {
+        score += table ? 130 : -70;
+        if (pat.type === 'single') score += 70;
+        if (info.opponentsCanBeat === 0) score += 90;
+    }
+    if (anyOpponentTwo && pat.type === 'pair') score += 120;
+
+    if (!urgent) {
+        score -= twosUsed * 260;
+        score -= Math.max(0, controlsUsed - twosUsed) * 75;
+    } else if (table) {
+        score += twosUsed * 100;
+        score += Math.max(0, controlsUsed - twosUsed) * 30;
+    }
+
+    return score;
+}
+
+function scoreTestNormalRolloutPass(hands, cur, table) {
+    const opponents = hands.filter((_, idx) => idx !== cur);
+    const minOpp = opponents.length ? Math.min(...opponents.map(h => h.length)) : 99;
+    const lastOwnerCards = table && hands[table.owner] ? hands[table.owner].length : 99;
+    const myCards = hands[cur] ? hands[cur].length : 99;
+    let score = 12;
+
+    if (minOpp <= 2) score -= 230;
+    if (opponents.some(h => h.length === 1)) score -= 170;
+    if (myCards - minOpp >= 4) score -= 70 + (myCards - minOpp) * 8;
+    if (lastOwnerCards <= 2) score -= 155;
+
+    if (table) {
+        const rank = Math.floor((table.val || 0) / 4);
+        if (table.type === 'single' && rank >= VALUES['K']) score += 120;
+        if (table.type === 'pair' && rank >= VALUES['Q']) score += 95;
+        if (table.len === 5 && table.comboRank >= FIVE_CARD_POWER.fullhouse) score += 90;
+    }
+
+    return score;
+}
+
+function chooseHeavyCheatRolloutMove(legal, hands, cur, table, first) {
+    let best = null;
+    let bestScore = -Infinity;
+    const hand = hands[cur];
+    const beforePlan = estimateMoveCountLite(hand);
+    const humanCards = hands[0] ? hands[0].length : 99;
+    const critical = Math.min(...hands.map((h, i) => i === cur ? 99 : h.length)) <= 3;
+
+    for (const move of legal) {
+        const after = hand.filter(c => !move.cards.includes(c));
+        if (after.length === 0) return move;
+        const info = getLocalOpponentResponseInfo(move, cur, hands);
+        const unbeatable = info.opponentsCanBeat === 0;
+        const pat = move.pattern;
+        const rank = Math.floor(pat.val / 4);
+
+        let score = 0;
+        score += (beforePlan - estimateMoveCountLite(after)) * 420;
+        score += move.cards.length * 115;
+        score -= getStrengthCost(pat) * 0.28;
+        if (canBeOneMove(after)) score += 2600;
+        if (canFinishInTwoMovesV5(after)) score += 1150;
+        if (unbeatable) score += 2100 + (critical ? 900 : 0);
+        else score -= info.opponentsCanBeat * 80;
+        if (info.replyFinishers.length > 0) score -= 900;
+        if (info.humanReplyFinisher) score -= 1400;
+        if (info.humanCanBeat) score -= humanCards <= 3 ? 420 : 60;
+        else if (humanCards <= 3) score += 900;
+        if (!table && !critical && pat.type === 'single' && rank <= VALUES['8']) score += 55;
+        if (!table && pat.type === 'single' && rank >= VALUES['K'] && after.length > 2 && !unbeatable) score -= 80;
+
+        if (score > bestScore) {
+            bestScore = score;
+            best = move;
+        }
+    }
+
+    if (table && !first && bestScore < -260) return null;
+    return best;
+}
+
+function getLocalOpponentResponseInfo(move, playerIdx, hands) {
+    const info = {
+        opponentsCanBeat: 0,
+        humanCanBeat: false,
+        humanReplyFinisher: false,
+        replyFinishers: []
+    };
+
+    for (let i = 0; i < numPlayers; i++) {
+        if (i === playerIdx) continue;
+        const hand = hands[i] || [];
+        if (hand.length === 0) continue;
+        const replies = generateRolloutLegalMovesV10(hand, move.pattern, false, -1);
+        if (replies.length === 0) continue;
+        info.opponentsCanBeat += 1;
+        if (i === 0) info.humanCanBeat = true;
+        if (replies.some(reply => reply.cards.length === hand.length)) {
+            info.replyFinishers.push(i);
+            if (i === 0) info.humanReplyFinisher = true;
+        }
+    }
+    return info;
+}
+
+function buildHeavyCheatRolloutResult(hands, me, winner) {
+    const opponentCounts = hands.filter((_, i) => i !== me).map(h => h.length);
+    return {
+        winner,
+        myRemain: hands[me] ? hands[me].length : 99,
+        humanRemain: hands[0] ? hands[0].length : 99,
+        minOppRemain: opponentCounts.length ? Math.min(...opponentCounts) : 99
+    };
+}
+
+function scoreHeavyCheatRolloutResult(result, state) {
+    let score = 0;
+    if (result.winner === state.playerIdx) score += 850000;
+    else if (result.winner === 0) score -= 520000;
+    else if (result.winner >= 0) score -= 440000;
+
+    score -= result.myRemain * 11800;
+    score += result.humanRemain * 980;
+    score += result.minOppRemain * 460;
+    if (result.humanRemain <= 2 && result.winner !== state.playerIdx) score -= 18000;
+    if (result.myRemain <= 2) score += 14000;
+    return score;
 }
 
 function chooseAIActionV5(legalMoves, state) {
@@ -6213,9 +7448,14 @@ function patternName(pattern) {
 function startNewTestLog() {
     testTurnNo = 0;
     testCurrentLog = [];
+    testCurrentCheaterIdx = hiddenCheaterAiIndex;
+    if (hiddenCheaterAiIndex > 0) {
+        testCheatChosenCounts[hiddenCheaterAiIndex] = (testCheatChosenCounts[hiddenCheaterAiIndex] || 0) + 1;
+    }
     addTestLog(`==== 第 ${testBatchPlayed + 1} 局開始 ====`);
     addTestLog(`玩家數：${numPlayers}`);
     addTestLog(`AI版本：${buildAIVersionSummary()}`);
+    if (hiddenCheaterAiIndex > 0) addTestLog(`本局作幣AI：${players[hiddenCheaterAiIndex].name}（由三個AI手牌中評估最好者，只看牌）`);
     addTestLog(`先手：${players[currentPlayer].name}`);
     addTestLog(`起始牌：${getCardNameByValue(startCardValue)}`);
     if (testFixedSeedEnabled) addTestLog(`Seed重播｜baseSeed=${testSeedText}｜baseHash=${testBaseSeed >>> 0}｜deckSeed=${currentDeckSeed >>> 0}`);
@@ -6230,6 +7470,9 @@ function handleTestGameOver(winnerIdx) {
     const winner = players[winnerIdx];
     const gameNo = testBatchPlayed + 1;
     testStats[winnerIdx] = (testStats[winnerIdx] || 0) + 1;
+    if (testCurrentCheaterIdx > 0 && winnerIdx === testCurrentCheaterIdx) {
+        testCheatWinCounts[winnerIdx] = (testCheatWinCounts[winnerIdx] || 0) + 1;
+    }
     testTotalTurns += testTurnNo;
 
     const scoreInfo = calculateRoundScoreDeltas(winnerIdx);
@@ -6308,7 +7551,7 @@ function addTestLog(line) {
 function updateTestProgress() {
     const progress = byId('test-progress');
     if (!progress) return;
-    progress.innerText = `${testBatchPlayed}/${testBatchTarget} 局｜${buildWinSummary()}`;
+    progress.innerText = `${testBatchPlayed}/${testBatchTarget} 局｜${buildCheaterWinSummary()}｜${buildWinSummary()}｜${buildWinRateSummary()}`;
 }
 
 function buildWinSummary() {
@@ -6321,6 +7564,30 @@ function buildWinRateSummary() {
     return testStats
         .map((wins, idx) => `${PLAYER_NAMES[idx]} ${((wins || 0) / testBatchPlayed * 100).toFixed(1)}%`)
         .join(' / ');
+}
+
+function getHiddenCheaterTestLabel() {
+    if (hiddenCheatMode === 'best-hand') return '每局最好牌AI';
+    const idx = fixedHiddenCheaterAiIndex;
+    if (idx > 0 && idx < numPlayers) return PLAYER_NAMES[idx];
+    if (hiddenCheaterAiIndex > 0 && hiddenCheaterAiIndex < numPlayers) return PLAYER_NAMES[hiddenCheaterAiIndex];
+    return '無';
+}
+
+function buildCheaterWinSummary() {
+    if (!testBatchPlayed || !testCheatChosenCounts || testCheatChosenCounts.length === 0) return '作幣者勝率：尚無結果';
+    const totalChosen = testCheatChosenCounts.reduce((sum, n) => sum + (n || 0), 0);
+    const totalWins = testCheatWinCounts.reduce((sum, n) => sum + (n || 0), 0);
+    const overall = totalChosen > 0 ? `${totalWins}/${totalChosen}（${(totalWins / totalChosen * 100).toFixed(1)}%）` : '尚無結果';
+    const details = testCheatChosenCounts
+        .map((chosen, idx) => {
+            if (idx === 0 || !chosen) return '';
+            const wins = testCheatWinCounts[idx] || 0;
+            return `${PLAYER_NAMES[idx]} ${wins}/${chosen}`;
+        })
+        .filter(Boolean)
+        .join(' / ');
+    return `作幣者勝率：${overall}${details ? `｜${details}` : ''}`;
 }
 
 
@@ -6371,6 +7638,8 @@ function buildTestLogText(compact) {
         `完成局數：${testBatchPlayed}/${testBatchTarget}`,
         `玩家數：${numPlayers}`,
         `規則：三條單獨出牌 = ${testAllowTriples ? '允許' : '不允許'}`,
+        `作幣AI：${getHiddenCheaterTestLabel()}（只看牌，不換牌）`,
+        `測試自動策略：你=簡易自動；普通AI=快速普通；作幣AI=看牌解局`,
         `計分規則：剩牌每張 -1；剩 9 張以上 x2；每張老 2 再 x2；贏家取得三家扣分總和`,
         `AI版本：${buildAIVersionSummary()}`,
         `分數顯示：AI分數已校正；raw=未校正決策分數；你使用 ${getAIVersionLabel(0)}；v10-Hybrid-Rollout 以 EndSolver 為底，關鍵局面抽樣未知牌做 rollout 重估；固定seed時，同一seed+同一局號會重播同一副牌`,
@@ -6378,6 +7647,7 @@ function buildTestLogText(compact) {
         `重播規則：deckSeed = hash(baseHash + 玩家數 + 局號)；AI微隨機使用獨立seed，不會影響發牌序列`,
         `勝場統計：${buildWinSummary()}`,
         `勝率統計：${buildWinRateSummary()}`,
+        `${buildCheaterWinSummary()}`,
         `積分榜：${buildScoreLeaderboardSummary()}`,
         `積分排名：${buildScoreRankSummary()}`,
         `平均手數：${buildAverageTurnSummary()}`,

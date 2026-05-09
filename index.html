@@ -1727,7 +1727,10 @@ async function startGame(n) {
     queueBackgroundMusicStart();
 
     testMode = false;
-    hiddenCheatMode = 'best-hand';
+    hiddenCheatMode = 'off';
+    hiddenCheaterAiIndex = -1;
+    hiddenCheatPlan = [];
+    hiddenCheatPlanCursor = 0;
     fixedHiddenCheaterAiIndex = 1;
     testAllowTriples = !!(byId('allow-triples') && byId('allow-triples').checked);
     testRunning = false;
@@ -2611,10 +2614,6 @@ function chooseAIAction(playerIdx) {
     if (legalMoves.length === 0) return null;
 
     const state = buildAIState(playerIdx);
-    if (playerIdx === hiddenCheaterAiIndex) {
-        const cheatAction = chooseAIActionHeavyCheat(legalMoves, state);
-        if (cheatAction) return cheatAction;
-    }
     if (state.aiVersion === 'v10_hybrid_rollout_challenger') return chooseAIActionV10HybridRollout(legalMoves, state);
     if (state.aiVersion === 'v9e_endsolver_challenger') return chooseAIActionV9EEndSolver(legalMoves, state);
     if (state.aiVersion === 'v9e_seedtest_challenger' || state.aiVersion === 'v9e_balance_challenger') return chooseAIActionV9EBalance(legalMoves, state);
@@ -2649,6 +2648,272 @@ function chooseAIAction(playerIdx) {
     return { move: best, score: bestScore };
 }
 
+function chooseCheapLowTableReply(legalMoves, state) {
+    if (!lastPlayedCards || isFirstRound || !state.isFollowing) return null;
+    if (lastPlayedCards.owner === state.playerIdx) return null;
+    if (!lastPlayedCards.type || lastPlayedCards.len > 3) return null;
+
+    const tableRank = Math.floor((lastPlayedCards.val || 0) / 4);
+    const lowLimit = lastPlayedCards.type === 'single' ? VALUES['8'] :
+        (lastPlayedCards.type === 'pair' ? VALUES['9'] : VALUES['8']);
+    if (tableRank > lowLimit) return null;
+
+    const candidates = legalMoves
+        .filter(move => move.pattern && move.pattern.type === lastPlayedCards.type && move.pattern.len === lastPlayedCards.len)
+        .sort((a, b) => getStrengthCost(a.pattern) - getStrengthCost(b.pattern));
+    const move = candidates[0];
+    if (!move) return null;
+
+    const replyRank = Math.floor((move.pattern.val || 0) / 4);
+    const humanUrgent = players[0] && players[0].hand.length <= 5;
+    const maxReplyRank = lastPlayedCards.type === 'single' ? VALUES['Q'] : VALUES['K'];
+    if (!humanUrgent && replyRank > maxReplyRank) return null;
+
+    move.aiScore = 900000 - getStrengthCost(move.pattern);
+    move.pattern.aiScore = move.aiScore;
+    move.pattern.aiMode = 'cheap-low-reply';
+    return { move, score: move.aiScore, mode: 'cheap-low-reply' };
+}
+
+function chooseAntiHumanTeamAction(legalMoves, state) {
+    if (testMode || state.playerIdx <= 0 || hiddenCheatMode !== 'best-hand') return null;
+    if (!players[0] || players[0].hand.length === 0) return null;
+
+    const hands = players.map(p => [...p.hand].sort((a, b) => a.value - b.value));
+    const depth = getAntiHumanTeamDepth(hands, state);
+    const table = lastPlayedCards ? { ...lastPlayedCards } : null;
+    const memo = new Map();
+    const candidates = getAntiHumanTeamCandidates(legalMoves, hands, state.playerIdx, table, isFirstRound, true);
+    let bestMove = null;
+    let bestScore = -Infinity;
+
+    for (const move of candidates) {
+        const next = applyAntiHumanTeamMove(hands, state.playerIdx, move);
+        const child = solveAntiHumanTeamState(next.hands, (state.playerIdx + 1) % numPlayers, next.table, false, 0, depth - 1, memo);
+        const score = child + scoreAntiHumanTeamMove(move, hands, state.playerIdx, table) * 0.22;
+        if (score > bestScore) {
+            bestScore = score;
+            bestMove = move;
+        }
+    }
+
+    if (table && !isFirstRound) {
+        const passState = applyPeekPassState(hands, state.playerIdx, table, passCount, isFirstRound);
+        const passScore = solveAntiHumanTeamState(passState.hands, (state.playerIdx + 1) % numPlayers, passState.table, passState.first, passState.passN, depth - 1, memo) +
+            scoreAntiHumanTeamPass(hands, state.playerIdx, table) * 0.22;
+        if (passScore > bestScore) return { move: null, score: passScore, mode: 'anti-human-team-pass' };
+    }
+
+    if (!bestMove) return null;
+    bestMove.aiScore = bestScore;
+    bestMove.pattern.aiScore = bestScore;
+    bestMove.pattern.aiMode = 'anti-human-team';
+    return { move: bestMove, score: bestScore, mode: 'anti-human-team' };
+}
+
+function getAntiHumanTeamDepth(hands, state) {
+    const humanCount = hands[0] ? hands[0].length : 13;
+    const minAiCount = Math.min(...hands.slice(1).map(h => h.length));
+    if (humanCount <= 3 || minAiCount <= 3 || state.anyOpponentLastCard) return 6;
+    if (humanCount <= 6 || minAiCount <= 5 || canBeOneMove(hands[0])) return 5;
+    return 4;
+}
+
+function solveAntiHumanTeamState(handsInput, cur, table, first, passN, depth, memo) {
+    const hands = handsInput;
+    if (hands[0] && hands[0].length === 0) return -1000000000 - depth * 10000;
+    for (let i = 1; i < numPlayers; i++) {
+        if (hands[i] && hands[i].length === 0) return 1000000000 + depth * 10000;
+    }
+    if (depth <= 0) return evaluateAntiHumanTeamState(hands, table);
+
+    const key = buildAntiHumanTeamKey(hands, cur, table, first, passN, depth);
+    if (memo.has(key)) return memo.get(key);
+
+    const legal = generateRolloutLegalMovesV10(hands[cur], table, first, startCardValue);
+    const isHuman = cur === 0;
+    let best = isHuman ? Infinity : -Infinity;
+
+    if (legal.length > 0) {
+        const candidates = getAntiHumanTeamCandidates(legal, hands, cur, table, first, false);
+        for (const move of candidates) {
+            const next = applyAntiHumanTeamMove(hands, cur, move);
+            const child = solveAntiHumanTeamState(next.hands, (cur + 1) % numPlayers, next.table, false, 0, depth - 1, memo);
+            const total = child + scoreAntiHumanTeamMove(move, hands, cur, table) * 0.10;
+            if (isHuman) best = Math.min(best, total);
+            else best = Math.max(best, total);
+        }
+    }
+
+    if (table && !first) {
+        const next = applyPeekPassState(hands, cur, table, passN, first);
+        const child = solveAntiHumanTeamState(next.hands, (cur + 1) % numPlayers, next.table, next.first, next.passN, depth - 1, memo);
+        const total = child + scoreAntiHumanTeamPass(hands, cur, table) * 0.10;
+        if (isHuman) best = Math.min(best, total);
+        else best = Math.max(best, total);
+    }
+
+    if (!Number.isFinite(best)) best = evaluateAntiHumanTeamState(hands, table);
+    memo.set(key, best);
+    return best;
+}
+
+function getAntiHumanTeamCandidates(legal, hands, cur, table, first, rootTurn) {
+    const isHuman = cur === 0;
+    const limit = rootTurn ? 18 : (isHuman ? 6 : 7);
+    const rows = legal.map(move => ({
+        move,
+        score: scoreAntiHumanTeamMove(move, hands, cur, table)
+    }));
+
+    const immediate = rows.filter(row => row.move.cards.length === (hands[cur] ? hands[cur].length : 0));
+    rows.sort((a, b) => isHuman ? a.score - b.score : b.score - a.score);
+    return dedupeCheatMoveRows([...immediate, ...rows])
+        .slice(0, limit)
+        .map(row => row.move);
+}
+
+function scoreAntiHumanTeamMove(move, hands, cur, table) {
+    const hand = hands[cur] || [];
+    const after = hand.filter(c => !move.cards.includes(c));
+    const pat = move.pattern;
+    const isHuman = cur === 0;
+    const humanHand = hands[0] || [];
+    const info = getLocalOpponentResponseInfo(move, cur, hands);
+    const humanCanReply = isHuman ? false : info.humanCanBeat;
+    const aiCanReplyHuman = isHuman ? canAnyAiBeatPattern(pat, hands) : false;
+    const beforePlan = estimateMoveCountLite(hand);
+    const afterPlan = estimateMoveCountLite(after);
+    const humanPressure = Math.max(0, 11 - humanHand.length);
+
+    if (after.length === 0) return isHuman ? -100000000 : 100000000;
+
+    if (isHuman) {
+        let score = 0;
+        score -= (beforePlan - afterPlan) * 38000;
+        score -= move.cards.length * 4200;
+        score += getStrengthCost(pat) * 1.4;
+        if (!aiCanReplyHuman) score -= 90000;
+        if (canBeOneMove(after)) score -= 140000;
+        if (canFinishInTwoMovesV5(after)) score -= 76000;
+        if (table && table.owner > 0) score -= 34000;
+        return score;
+    }
+
+    let score = 0;
+    score += (beforePlan - afterPlan) * 36000;
+    score += move.cards.length * 4200;
+    score -= getStrengthCost(pat) * 2.2;
+    score += evaluateHandShapeFast(after) * 1.6;
+
+    if (canBeOneMove(after)) score += 155000;
+    if (canFinishInTwoMovesV5(after)) score += 85000;
+    if (!humanCanReply) score += 72000 + humanPressure * 13000;
+    else score -= 42000 + humanPressure * 9000;
+
+    if (table && table.owner === 0) score += 125000 + humanPressure * 12000;
+    if (table && table.owner > 0 && table.owner !== cur && !canHumanBeatPattern(table, hands)) score -= 90000;
+    if (table && table.owner > 0 && table.owner !== cur && after.length <= 1) score += 120000;
+
+    if (humanHand.length <= 8) {
+        if (pat.type !== 'single') score += 28000;
+        if (!humanCanReply) score += 52000;
+        if (pat.type === 'single' && humanCanReply) score -= 28000;
+    }
+    if (canBeOneMove(humanHand)) score += humanCanReply ? -180000 : 155000;
+    if (humanHand.length <= 3) score += humanCanReply ? -170000 : 170000;
+    if (humanHand.length === 1 && pat.type !== 'single') score += 95000;
+    if (info.humanReplyFinisher) score -= 260000;
+    if (info.replyFinishers.some(idx => idx > 0)) score += 35000;
+
+    return score;
+}
+
+function scoreAntiHumanTeamPass(hands, cur, table) {
+    if (!table) return -Infinity;
+    const isHuman = cur === 0;
+    const owner = table.owner;
+    const humanHand = hands[0] || [];
+    let score = 0;
+
+    if (isHuman) {
+        score += owner > 0 ? 42000 : -12000;
+        if (owner > 0 && !canHumanBeatPattern(table, hands)) score += 70000;
+        return score;
+    }
+
+    if (owner > 0) {
+        score += owner === cur ? -20000 : 78000;
+        if (!canHumanBeatPattern(table, hands)) score += 98000;
+        if ((hands[owner] || []).length <= 3) score += 90000;
+    } else {
+        score -= 155000;
+    }
+    if (canBeOneMove(humanHand) || humanHand.length <= 3) score -= 90000;
+    return score;
+}
+
+function evaluateAntiHumanTeamState(hands, table) {
+    const humanHand = hands[0] || [];
+    if (humanHand.length === 0) return -1000000000;
+    for (let i = 1; i < numPlayers; i++) {
+        if (hands[i] && hands[i].length === 0) return 1000000000;
+    }
+
+    const aiHands = hands.slice(1, numPlayers);
+    const humanPlan = estimateMoveCountLite(humanHand);
+    const aiPlans = aiHands.map(h => estimateMoveCountLite(h));
+    const bestAiPlan = Math.min(...aiPlans);
+    const minAiCards = Math.min(...aiHands.map(h => h.length));
+    const aiControls = aiHands.reduce((sum, h) => sum + countControlCards(h), 0);
+
+    let score = 0;
+    score += (humanHand.length - minAiCards) * 26000;
+    score += (humanPlan - bestAiPlan) * 72000;
+    score += aiControls * 7000;
+    if (canBeOneMove(humanHand)) score -= 220000;
+    if (canFinishInTwoMovesV5(humanHand)) score -= 120000;
+    if (aiHands.some(h => canBeOneMove(h))) score += 210000;
+    if (aiHands.some(h => canFinishInTwoMovesV5(h))) score += 95000;
+    if (table) {
+        if (table.owner === 0) score -= 100000;
+        else {
+            score += 85000;
+            if (!canHumanBeatPattern(table, hands)) score += 135000;
+            if ((hands[table.owner] || []).length <= 3) score += 80000;
+        }
+    }
+    return score;
+}
+
+function canHumanBeatPattern(pattern, hands) {
+    if (!pattern || !hands[0]) return false;
+    return generateRolloutLegalMovesV10(hands[0], pattern, false, -1).length > 0;
+}
+
+function canAnyAiBeatPattern(pattern, hands) {
+    if (!pattern) return false;
+    for (let i = 1; i < numPlayers; i++) {
+        if (generateRolloutLegalMovesV10(hands[i] || [], pattern, false, -1).length > 0) return true;
+    }
+    return false;
+}
+
+function applyAntiHumanTeamMove(hands, playerIdx, move) {
+    const vals = new Set(move.cards.map(c => c.value));
+    const nextHands = hands.map((hand, idx) => idx === playerIdx ? hand.filter(c => !vals.has(c.value)) : hand);
+    return {
+        hands: nextHands,
+        table: { ...move.pattern, owner: playerIdx }
+    };
+}
+
+function buildAntiHumanTeamKey(hands, cur, table, first, passN, depth) {
+    const h = hands.map(hand => hand.map(c => c.value).sort((a, b) => a - b).join('.')).join('|');
+    const t = table ? `${table.type}:${table.len}:${table.val}:${table.comboRank || 0}:${table.owner}` : 'n';
+    return `team/${depth}/${cur}/${first ? 1 : 0}/${passN}/${t}/${h}`;
+}
+
 function chooseAIActionHeavyCheat(legalMoves, state) {
     const decisive = chooseDecisivePeekMove(legalMoves, state);
     if (decisive) return decisive;
@@ -2667,6 +2932,88 @@ function chooseAIActionHeavyCheat(legalMoves, state) {
     return null;
 }
 
+function shouldUseFormalPeekAssist(playerIdx, state) {
+    if (testMode || playerIdx <= 0 || playerIdx === hiddenCheaterAiIndex) return false;
+    if (hiddenCheatMode !== 'best-hand') return false;
+    const human = players[0];
+    if (!human || human.hand.length === 0) return false;
+    return true;
+}
+
+function chooseFormalPeekAssistAction(legalMoves, state) {
+    const human = players[0];
+    if (!human || !legalMoves || legalMoves.length === 0) return null;
+
+    let best = null;
+    let bestScore = -Infinity;
+    const hands = players.map(p => p.hand);
+    const moveCache = buildExactOpponentMoveCache(state.playerIdx, hands);
+    const humanCanFinish = canBeOneMove(human.hand);
+    const followingHuman = !!(lastPlayedCards && lastPlayedCards.owner === 0);
+    const beforePlan = estimateMoveCountLite(state.hand);
+    const humanPressure = Math.max(0, 10 - human.hand.length);
+
+    for (const move of legalMoves) {
+        const after = state.hand.filter(c => !move.cards.includes(c));
+        const info = getExactOpponentResponseInfo(move, state.playerIdx, hands, moveCache);
+        const unbeatable = info.opponentsCanBeat === 0;
+        const humanBlocked = !info.humanCanBeat;
+        const pat = move.pattern;
+        const afterPlan = estimateMoveCountLite(after);
+
+        let score = 0;
+        if (after.length === 0) {
+            score = 1000000;
+        } else {
+            score += (beforePlan - afterPlan) * 14000;
+            score += move.cards.length * 1600;
+            score -= getStrengthCost(pat) * 4.2;
+            score += evaluateHandShapeFast(after) * 1.1;
+
+            if (canBeOneMove(after)) score += 72000;
+            if (canFinishInTwoMovesV5(after)) score += 38000;
+            if (unbeatable) score += 42000 + humanPressure * 4200;
+            else score -= info.opponentsCanBeat * 8500;
+
+            if (humanBlocked) score += 26000 + humanPressure * 9200;
+            else score -= 18000 + humanPressure * 7600;
+
+            if (followingHuman) score += 65000 + humanPressure * 8000;
+            if (humanCanFinish) score += humanBlocked ? 85000 : -90000;
+            if (human.hand.length <= 3) score += humanBlocked ? 90000 : -120000;
+            else if (human.hand.length <= 5) score += humanBlocked ? 52000 : -52000;
+            else if (human.hand.length <= 8 && humanBlocked) score += 26000;
+
+            if (human.hand.length === 1) {
+                if (pat.type !== 'single') score += 62000;
+                else score += humanBlocked ? 50000 : -80000;
+            } else if (human.hand.length === 2) {
+                if (pat.type === 'pair') score += humanBlocked ? 52000 : -56000;
+                if (pat.type !== 'single') score += 16000;
+            }
+
+            if (state.isOpening && human.hand.length <= 8 && pat.type === 'single' && !humanBlocked) score -= 24000;
+            if (state.isOpening && human.hand.length <= 8 && pat.type !== 'single') score += 9000;
+        }
+
+        if (after.length <= 5 && canBeOneMove(after)) score += 42000;
+        if (after.length <= 7 && canFinishInTwoMovesV5(after)) score += 26000;
+        if (info.humanReplyFinisher) score -= 260000;
+        if (info.replyFinishers.length > 0) score -= 90000;
+
+        if (score > bestScore) {
+            bestScore = score;
+            best = move;
+        }
+    }
+
+    if (!best || bestScore < 8000) return null;
+    best.aiScore = bestScore;
+    best.pattern.aiScore = bestScore;
+    best.pattern.aiMode = 'peek-assist';
+    return { move: best, score: bestScore, mode: 'peek-assist' };
+}
+
 function chooseHeavyCheatRealtimeAction(legalMoves, state) {
     if (!legalMoves || legalMoves.length === 0) return null;
 
@@ -2677,8 +3024,8 @@ function chooseHeavyCheatRealtimeAction(legalMoves, state) {
 
     let best = null;
     let bestScore = -Infinity;
-    const maxRows = testMode ? 36 : 28;
-    const maxSteps = testMode ? 180 : 130;
+    const maxRows = testMode ? 36 : 48;
+    const maxSteps = testMode ? 180 : 210;
 
     for (const row of rows.slice(0, maxRows)) {
         const result = rolloutAfterCandidateHeavyCheat(row.move, state, maxSteps);
@@ -2913,9 +3260,11 @@ function chooseDecisivePeekMove(legalMoves, state) {
 
         if (after.length === 0) score = 10000000;
         else if (unbeatable && canBeOneMove(after)) score = 700000 + getStrengthCost(move.pattern) * -2;
-        else if (unbeatable && canFinishInTwoMovesV5(after) && after.length <= 6) score = 360000 - after.length * 2000;
+        else if (unbeatable && canFinishInTwoMovesV5(after) && after.length <= 8) score = 390000 - after.length * 2000;
         else if (state.isFollowing && urgentOwner && urgentOwner.hand.length <= 2 && unbeatable) score = 260000 - after.length * 1200;
-        else if (state.isOpening && players[0] && players[0].hand.length <= 2 && !info.humanCanBeat) score = 180000 - after.length * 1000;
+        else if (state.isFollowing && urgentOwner && urgentOwner.id === 0 && urgentOwner.hand.length <= 8 && !info.humanCanBeat) score = 330000 - after.length * 1400;
+        else if (state.isOpening && players[0] && players[0].hand.length <= 8 && !info.humanCanBeat) score = 240000 - after.length * 1000;
+        else if (state.isOpening && players[0] && canBeOneMove(players[0].hand) && !info.humanCanBeat) score = 240000 - after.length * 1000;
 
         if (score > bestScore) {
             bestScore = score;
@@ -2963,8 +3312,8 @@ function getHeavyCheatCandidateRows(legalMoves, state, urgency, baseMove) {
     rows.sort((a, b) => b.score - a.score);
     strategic.sort((a, b) => b.score - a.score);
     return dedupeCheatMoveRows([
-        ...strategic.slice(0, testMode ? 18 : 26),
-        ...rows.slice(0, testMode ? 36 : 40)
+        ...strategic.slice(0, testMode ? 18 : 32),
+        ...rows.slice(0, testMode ? 36 : 56)
     ]);
 }
 
@@ -2973,14 +3322,15 @@ function buildHeavyCheatUrgency(state) {
     const tableOwner = lastPlayedCards && players[lastPlayedCards.owner] ? players[lastPlayedCards.owner] : null;
     const opponents = players.filter(p => p.id !== state.playerIdx);
     const anyOpponentCanFinish = opponents.some(p => p.hand.length > 0 && canBeOneMove(p.hand));
+    const humanCanFinish = !!(human && human.hand.length > 0 && canBeOneMove(human.hand));
     return {
         humanCards: human ? human.hand.length : 99,
-        humanCanFinish: !!(human && human.hand.length > 0 && canBeOneMove(human.hand)),
+        humanCanFinish,
         anyOpponentCanFinish,
         tableOwnerCards: tableOwner ? tableOwner.hand.length : 99,
         tableOwnerIsHuman: !!(tableOwner && tableOwner.id === 0),
         tableOwnerCanFinish: !!(tableOwner && tableOwner.hand.length > 0 && canBeOneMove(tableOwner.hand)),
-        critical: state.lowestOpponentCards <= 3 || anyOpponentCanFinish || (human && human.hand.length <= 3)
+        critical: state.lowestOpponentCards <= 4 || anyOpponentCanFinish || humanCanFinish || (human && human.hand.length <= 8)
     };
 }
 
@@ -3066,8 +3416,8 @@ function scoreHeavyCheatMove(move, state, opponentMoveCache, urgency) {
 
     if (info.replyFinishers.length > 0) score -= 4200 + info.replyFinishers.length * 700;
     if (info.humanReplyFinisher) score -= 5200;
-    if (info.humanCanBeat) score -= urgency.humanCards <= 3 ? 1500 : 220;
-    else if (urgency.humanCards <= 3) score += 2300;
+    if (info.humanCanBeat) score -= urgency.humanCards <= 8 ? 4200 : 900;
+    else if (urgency.humanCards <= 8 || urgency.humanCanFinish) score += 6800;
 
     if (state.isFollowing && lastPlayedCards) {
         const owner = players[lastPlayedCards.owner];
@@ -3076,6 +3426,8 @@ function scoreHeavyCheatMove(move, state, opponentMoveCache, urgency) {
         if (owner && owner.hand.length <= 3) score += 1600;
         if (owner && canBeOneMove(owner.hand)) score += 2100;
         if (unbeatable) score += 1900;
+        if (owner && owner.id === 0 && !info.humanCanBeat) score += 8800;
+        if (owner && owner.id === 0 && info.humanCanBeat) score -= 5200;
     }
 
     if (state.isOpening) {
@@ -3089,6 +3441,11 @@ function scoreHeavyCheatMove(move, state, opponentMoveCache, urgency) {
         } else if (urgency.humanCards === 2) {
             if (pat.type === 'pair') score += info.humanCanBeat ? -1800 : 3800;
             else if (pat.type !== 'single') score += 1900;
+        } else if (urgency.humanCards <= 8 || urgency.humanCanFinish) {
+            if (!info.humanCanBeat) score += 7200;
+            else score -= 3600;
+            if (pat.type !== 'single') score += 900;
+            if (unbeatable) score += 1800;
         }
     }
 
